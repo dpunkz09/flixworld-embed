@@ -48,7 +48,7 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
   const [volume, setVolume] = useState(1);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(true); // start muted for guaranteed autoplay
   const [fullscreen, setFullscreen] = useState(false);
   const [shown, setShown] = useState(true);
 
@@ -165,7 +165,11 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, d) => {
         setLevels(d.levels.map(l => ({ height: l.height, bitrate: l.bitrate })));
         setIsLoading(false);
-        video.play().catch(() => {});
+        // Try normal play; if blocked by autoplay policy, fall back to muted play
+        video.play().catch(() => {
+          video.muted = true;
+          video.play().catch(() => {});
+        });
       });
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => setCurrentLevel(d.level));
       hls.on(Hls.Events.ERROR, (_, d) => {
@@ -176,7 +180,13 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
       });
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = src;
-      video.onloadedmetadata = () => { setIsLoading(false); video.play().catch(() => {}); };
+      video.onloadedmetadata = () => {
+        setIsLoading(false);
+        video.play().catch(() => {
+          video.muted = true;
+          video.play().catch(() => {});
+        });
+      };
       video.onerror = () => { setError("Stream failed."); setIsLoading(false); };
     } else {
       setError("HLS not supported in this browser.");
@@ -467,6 +477,7 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
         ref={videoRef}
         className="w-full h-full"
         playsInline
+        muted
         onClick={togglePlay}
         onDoubleClick={toggleFullscreen}
         style={{
@@ -479,6 +490,18 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
 
       {/* ── Overlays ── */}
       <>
+          {/* ── Muted autoplay prompt ── */}
+          {muted && playing && !isLoading && (
+            <button
+              onClick={() => { const v = videoRef.current; if (!v) return; v.muted = false; setMuted(false); }}
+              className="absolute z-40 pointer-events-auto"
+              style={{ top: 16, right: 16, display: "flex", alignItems: "center", gap: 8, background: "rgba(0,0,0,0.65)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 99, padding: "6px 14px 6px 10px", cursor: "pointer" }}
+            >
+              <span className="material-symbols-rounded" style={{ fontSize: 20, color: "white" }}>volume_off</span>
+              <span style={{ color: "white", fontSize: 13, fontWeight: 600 }}>Tap to unmute</span>
+            </button>
+          )}
+
           {/* ── Loading spinner ── */}
           {isLoading && (
             <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">

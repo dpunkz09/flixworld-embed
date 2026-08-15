@@ -1,9 +1,21 @@
 import { fetchMovieStream } from "@/lib/api";
 import HLSPlayerClient from "@/components/HLSPlayerClient";
 import { notFound } from "next/navigation";
+import type { Metadata } from "next";
 
 interface Props {
   params: Promise<{ id: string }>;
+}
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id } = await params;
+  try {
+    const stream = await fetchMovieStream(id);
+    if (stream.status_code === "200" && stream.data.title) {
+      return { title: stream.data.title };
+    }
+  } catch { /* fall through to default */ }
+  return { title: "Movie Player" };
 }
 
 export default async function MovieEmbed({ params }: Props) {

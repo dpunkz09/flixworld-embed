@@ -20,7 +20,7 @@ function parseSeconds(ts: string): number {
 
 export async function loadThumbnailVTT(vttUrl: string): Promise<ThumbnailCue[]> {
   try {
-    const res = await fetch(vttUrl);
+    const res = await fetch(vttUrl, { next: { revalidate: 3600 } });
     if (!res.ok) return [];
     const text = await res.text();
 

@@ -84,9 +84,17 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
 
   // Playback state
   const [playing, setPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
+  // currentTime and buffered are hot-path (4×/sec) — stored as refs to avoid
+  // re-rendering the full component on every timeupdate event.
+  // The progress bar DOM is updated directly via RAF instead.
+  const currentTimeRef = useRef(0);
+  const bufferedRef = useRef(0);
+  const [currentTime, setCurrentTime] = useState(0); // synced at 250ms via RAF for time display & cue tracking
   const [duration, setDuration] = useState(0);
-  const [buffered, setBuffered] = useState(0);
+  const playedBarRef = useRef<HTMLDivElement>(null);
+  const bufferedBarRef = useRef<HTMLDivElement>(null);
+  const thumbBarRef = useRef<HTMLDivElement>(null);
+  const rafRef = useRef<number | null>(null);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(true); // start muted for guaranteed autoplay
   const [fullscreen, setFullscreen] = useState(false);
@@ -342,13 +350,26 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
     const onPlay = () => { setPlaying(true); scheduleHide(); };
     const onPause = () => { setPlaying(false); setShown(true); if (hideTimer.current) clearTimeout(hideTimer.current); };
     const onTime = () => {
-      setCurrentTime(v.currentTime);
-      if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
-      // Save progress at most once every 5 seconds
+      const ct = v.currentTime;
+      const buf = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0;
+      currentTimeRef.current = ct;
+      bufferedRef.current = buf;
+
+      // Update progress bar DOM directly — no React state, no re-render
+      const dur = v.duration || 0;
+      if (dur > 0) {
+        const played = (ct / dur) * 100;
+        const bufferedPct = (buf / dur) * 100;
+        if (playedBarRef.current) playedBarRef.current.style.width = `${played}%`;
+        if (bufferedBarRef.current) bufferedBarRef.current.style.width = `${bufferedPct}%`;
+        if (thumbBarRef.current) thumbBarRef.current.style.left = `${played}%`;
+      }
+
+      // Throttled save
       const now = Date.now();
       if (now - saveTimerRef.current > 5000) {
         saveTimerRef.current = now;
-        saveProgress(v.currentTime, v.duration);
+        saveProgress(ct, v.duration);
       }
     };
     const onDur = () => setDuration(v.duration);
@@ -358,6 +379,17 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
         try { localStorage.removeItem(progressKey); } catch { /* ignore */ }
       }
     };
+
+    // RAF loop — syncs currentTime state at ~15fps for time display and subtitle cue tracking
+    let lastSync = 0;
+    const tick = (ts: number) => {
+      if (ts - lastSync > 66) { // ~15fps
+        lastSync = ts;
+        setCurrentTime(currentTimeRef.current);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
     const onVol = () => { setVolume(v.volume); setMuted(v.muted); };
     const onFs = () => {
       const isFs = !!document.fullscreenElement;
@@ -409,6 +441,7 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
       v.removeEventListener("playing", onCanPlay);
       document.removeEventListener("fullscreenchange", onFs);
       if (bufferTimer.current) clearTimeout(bufferTimer.current);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [scheduleHide]);
 
@@ -523,8 +556,6 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
   }, [dragging, seekTo, updateHover]);
 
   // derived
-  const playedPct = duration ? (currentTime / duration) * 100 : 0;
-  const bufferedPct = duration ? (buffered / duration) * 100 : 0;
   const effVol = muted ? 0 : volume;
   const isTV = !!(data.season && data.episode);
   const qualityLabel = currentLevel === -1 ? "Auto" : levels[currentLevel]?.height ? `${levels[currentLevel].height}p` : "Auto";
@@ -1209,27 +1240,27 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
                     boxShadow: "inset 0 1px 2px rgba(0,0,0,0.4)",
                   }}>
                     {/* Buffered */}
-                    <div style={{
+                    <div ref={bufferedBarRef} style={{
                       position: "absolute", inset: 0,
-                      width: `${bufferedPct}%`,
+                      width: "0%",
                       borderRadius: 99,
                       background: "rgba(255,255,255,0.28)",
                       transition: "width 0.3s linear",
                     }} />
                     {/* Played — bright with subtle glow */}
-                    <div style={{
+                    <div ref={playedBarRef} style={{
                       position: "absolute", inset: 0,
-                      width: `${playedPct}%`,
+                      width: "0%",
                       borderRadius: 99,
                       background: "linear-gradient(90deg, rgba(255,255,255,0.9) 0%, #fff 100%)",
                       boxShadow: "0 0 8px rgba(255,255,255,0.4)",
                     }} />
 
                     {/* Scrubber thumb — centred on track using top/translate */}
-                    <div style={{
+                    <div ref={thumbBarRef} style={{
                       position: "absolute",
                       top: "50%",
-                      left: `${playedPct}%`,
+                      left: "0%",
                       transform: "translate(-50%, -50%)",
                       width: hovering || dragging ? 15 : 12,
                       height: hovering || dragging ? 15 : 12,

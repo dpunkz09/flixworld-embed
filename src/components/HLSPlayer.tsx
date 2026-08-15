@@ -35,6 +35,46 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevVolume = useRef(1);
 
+  // ── Watch progress (localStorage) ────────────────────────────────────────
+  // Key format: wp:tt0137523  (movie)  or  wp:tt0137523:1:1  (TV)
+  const progressKey = data.imdb_id
+    ? `wp:${data.imdb_id}${data.season ? `:${data.season}:${data.episode}` : ""}`
+    : null;
+
+  const loadSavedProgress = (): number => {
+    if (!progressKey) return 0;
+    try {
+      const raw = localStorage.getItem(progressKey);
+      if (!raw) return 0;
+      const { t } = JSON.parse(raw) as { t: number };
+      return typeof t === "number" && t > 5 ? t : 0;
+    } catch { return 0; }
+  };
+
+  const saveProgress = (t: number, dur: number) => {
+    if (!progressKey || !dur || t < 5) return;
+    // Don't save if within last 30s of the video (treat as "finished")
+    if (dur - t < 30) {
+      try { localStorage.removeItem(progressKey); } catch { /* ignore */ }
+      return;
+    }
+    try {
+      localStorage.setItem(progressKey, JSON.stringify({ t: Math.floor(t) }));
+    } catch { /* ignore quota errors */ }
+  };
+
+  const saveTimerRef = useRef<number>(0); // last save timestamp (Date.now())
+  const resumedRef = useRef(false);       // only seek once per load
+  const hasSavedProgress = loadSavedProgress() > 0;
+  const [showResumeToast, setShowResumeToast] = useState(hasSavedProgress);
+
+  // Auto-dismiss resume toast after 5s
+  useEffect(() => {
+    if (!showResumeToast) return;
+    const t = setTimeout(() => setShowResumeToast(false), 5000);
+    return () => clearTimeout(t);
+  }, [showResumeToast]);
+
   // HLS state
   const [sourceIndex, setSourceIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -119,12 +159,19 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
   );
 
   const [activeSubId, setActiveSubId] = useState<string | null>(null);
+
+  // Auto-select the first English track once tracks are available
+  useEffect(() => {
+    if (subTracks.length === 0) return;
+    const en = subTracks.find(t => t.label.toUpperCase().startsWith("EN"));
+    if (en) setActiveSubId(en.id);
+  }, [subTracks]);
   const [subCues, setSubCues] = useState<{ start: number; end: number; text: string }[]>([]);
   const [activeCue, setActiveCue] = useState<string | null>(null);
 
   // Subtitle appearance
-  const [subColor, setSubColor] = useState("#ffffff");
-  const [subSize, setSubSize] = useState(16); // px
+  const [subColor, setSubColor] = useState("#facc15");
+  const [subSize, setSubSize] = useState(24); // px
   const [subPosition, setSubPosition] = useState<"bottom" | "top" | "middle">("bottom");
 
   // ── Controls visibility ───────────────────────────────────────────────────
@@ -165,6 +212,12 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, d) => {
         setLevels(d.levels.map(l => ({ height: l.height, bitrate: l.bitrate })));
         setIsLoading(false);
+        // Restore saved progress (once per load)
+        if (!resumedRef.current) {
+          resumedRef.current = true;
+          const saved = loadSavedProgress();
+          if (saved > 0) video.currentTime = saved;
+        }
         // Try normal play; if blocked by autoplay policy, fall back to muted play
         video.play().catch(() => {
           video.muted = true;
@@ -182,6 +235,12 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
       video.src = src;
       video.onloadedmetadata = () => {
         setIsLoading(false);
+        // Restore saved progress (once per load)
+        if (!resumedRef.current) {
+          resumedRef.current = true;
+          const saved = loadSavedProgress();
+          if (saved > 0) video.currentTime = saved;
+        }
         video.play().catch(() => {
           video.muted = true;
           video.play().catch(() => {});
@@ -285,8 +344,20 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
     const onTime = () => {
       setCurrentTime(v.currentTime);
       if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
+      // Save progress at most once every 5 seconds
+      const now = Date.now();
+      if (now - saveTimerRef.current > 5000) {
+        saveTimerRef.current = now;
+        saveProgress(v.currentTime, v.duration);
+      }
     };
     const onDur = () => setDuration(v.duration);
+    const onEnded = () => {
+      // Clear saved progress when the video finishes
+      if (progressKey) {
+        try { localStorage.removeItem(progressKey); } catch { /* ignore */ }
+      }
+    };
     const onVol = () => { setVolume(v.volume); setMuted(v.muted); };
     const onFs = () => {
       const isFs = !!document.fullscreenElement;
@@ -320,6 +391,7 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
     v.addEventListener("pause", onPause);
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("durationchange", onDur);
+    v.addEventListener("ended", onEnded);
     v.addEventListener("volumechange", onVol);
     v.addEventListener("waiting", onWaiting);
     v.addEventListener("canplay", onCanPlay);
@@ -330,6 +402,7 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
       v.removeEventListener("pause", onPause);
       v.removeEventListener("timeupdate", onTime);
       v.removeEventListener("durationchange", onDur);
+      v.removeEventListener("ended", onEnded);
       v.removeEventListener("volumechange", onVol);
       v.removeEventListener("waiting", onWaiting);
       v.removeEventListener("canplay", onCanPlay);
@@ -500,6 +573,27 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
               <span className="material-symbols-rounded" style={{ fontSize: 20, color: "white" }}>volume_off</span>
               <span style={{ color: "white", fontSize: 13, fontWeight: 600 }}>Tap to unmute</span>
             </button>
+          )}
+
+          {/* ── Resume toast ── */}
+          {showResumeToast && !isLoading && (
+            <div className="absolute z-40 pointer-events-auto"
+              style={{ bottom: 96, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: 10, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, padding: "10px 16px" }}>
+              <span className="material-symbols-rounded" style={{ fontSize: 20, color: "rgb(251,191,36)" }}>history</span>
+              <span style={{ color: "white", fontSize: 13, fontWeight: 500 }}>
+                Resumed from <strong>{formatTime(loadSavedProgress())}</strong>
+              </span>
+              <button
+                onClick={() => { const v = videoRef.current; if (v) v.currentTime = 0; setShowResumeToast(false); }}
+                style={{ marginLeft: 6, background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, padding: "3px 10px", color: "rgba(255,255,255,0.7)", fontSize: 12, cursor: "pointer" }}>
+                Start over
+              </button>
+              <button
+                onClick={() => setShowResumeToast(false)}
+                style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: 2, display: "flex", alignItems: "center" }}>
+                <span className="material-symbols-rounded" style={{ fontSize: 16 }}>close</span>
+              </button>
+            </div>
           )}
 
           {/* ── Loading spinner ── */}
@@ -916,7 +1010,7 @@ export default function HLSPlayer({ data, thumbnailsUrl, subtitles, defaultSubs 
                     </div>
 
                     {/* Reset */}
-                    <button onClick={() => { setSubColor("#ffffff"); setSubSize(16); setSubPosition("bottom"); }}
+                    <button onClick={() => { setSubColor("#facc15"); setSubSize(24); setSubPosition("bottom"); }}
                       style={{ width: "100%", padding: "7px", borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                       Reset to defaults
                     </button>

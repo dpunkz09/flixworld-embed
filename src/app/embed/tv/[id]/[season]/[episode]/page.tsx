@@ -12,12 +12,21 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   try {
     const stream = await fetchTVStream(id, season, episode);
     if (stream.status_code === "200" && stream.data.title) {
+      const title = `${stream.data.title} — S${season}E${episode}`;
       return {
-        title: `${stream.data.title} — S${season}E${episode}`,
+        title,
+        description: `Watch ${stream.data.title} Season ${season} Episode ${episode} online. Free HD streaming with subtitles.`,
+        openGraph: {
+          title,
+          description: `Watch ${stream.data.title} S${season}E${episode} online. Free HD streaming with subtitles.`,
+          images: stream.data.backdrop ? [{ url: stream.data.backdrop }] : [],
+          type: "video.episode",
+        },
+        robots: { index: false, follow: false },
       };
     }
-  } catch { /* fall through to default */ }
-  return { title: "TV Player" };
+  } catch { /* fall through */ }
+  return { title: "TV Player", robots: { index: false, follow: false } };
 }
 
 export default async function TVEmbed({ params }: Props) {

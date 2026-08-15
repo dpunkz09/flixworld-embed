@@ -1,98 +1,134 @@
+import type { Metadata } from "next";
 import ApiTester from "@/components/ApiTester";
+
+export const metadata: Metadata = {
+  title: "Flixworld API — Free Video Streaming Embed API",
+  description:
+    "Embed free HD movie and TV show streams into any website with a single iframe. Powered by Flixworld API — subtitles, thumbnail scrubbing, and multi-source support included.",
+  openGraph: {
+    title: "Flixworld API — Free Video Streaming Embed API",
+    description:
+      "Embed free HD movie and TV show streams into any website with a single iframe.",
+    type: "website",
+  },
+};
 
 export default function Home() {
   return (
-    <main style={{ minHeight: "100vh", background: "#0a0a0f", color: "white", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+    <main style={{ minHeight: "100vh", background: "#0b0f1a", color: "white", fontFamily: "system-ui, -apple-system, sans-serif", overflowX: "hidden" }}>
+
+      {/* ── Nav ── */}
+      <nav style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 40px", borderBottom: "1px solid rgba(255,255,255,0.06)", position: "sticky", top: 0, background: "rgba(11,15,26,0.9)", backdropFilter: "blur(12px)", zIndex: 50 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>
+            <span style={{ color: "#f5c518" }}>Flix</span>world
+          </span>
+          <span style={{ fontSize: 11, background: "rgba(245,197,24,0.15)", border: "1px solid rgba(245,197,24,0.3)", color: "#f5c518", borderRadius: 4, padding: "1px 7px", fontWeight: 600 }}>API</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <a href="https://flixworld.xyz" target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", textDecoration: "none", padding: "6px 14px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", transition: "all 0.2s" }}>
+            flixworld.xyz
+          </a>
+        </div>
+      </nav>
 
       {/* ── Hero ── */}
-      <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", padding: "48px 24px 40px", textAlign: "center" }}>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 99, padding: "4px 14px", marginBottom: 20 }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#4ade80", display: "inline-block" }} />
-          <span style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontWeight: 500 }}>API Online</span>
+      <div style={{ position: "relative", padding: "80px 24px 64px", textAlign: "center", overflow: "hidden" }}>
+        {/* Glow orbs */}
+        <div style={{ position: "absolute", top: -80, left: "50%", transform: "translateX(-50%)", width: 600, height: 400, background: "radial-gradient(ellipse, rgba(245,197,24,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ position: "absolute", top: 40, left: "20%", width: 300, height: 300, background: "radial-gradient(ellipse, rgba(99,102,241,0.07) 0%, transparent 70%)", pointerEvents: "none" }} />
+
+        <div style={{ position: "relative", zIndex: 1 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(245,197,24,0.1)", border: "1px solid rgba(245,197,24,0.25)", borderRadius: 99, padding: "5px 14px", marginBottom: 24 }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", display: "inline-block" }} />
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", fontWeight: 500 }}>Free · No API key required for embed</span>
+          </div>
+
+          <h1 style={{ fontSize: "clamp(32px, 6vw, 64px)", fontWeight: 800, lineHeight: 1.1, margin: "0 0 16px", letterSpacing: "-0.03em" }}>
+            Next generation<br />
+            <span style={{ color: "#f5c518" }}>Video Streaming API</span>
+          </h1>
+
+          <p style={{ fontSize: "clamp(14px, 2vw, 18px)", color: "rgba(255,255,255,0.5)", maxWidth: 560, margin: "0 auto 40px", lineHeight: 1.7 }}>
+            Free streaming links for movies and TV episodes that can be effortlessly integrated into your website through our embed links and API.
+          </p>
+
+          <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+            <a href="#test" style={{ padding: "12px 28px", borderRadius: 8, background: "#f5c518", color: "#0b0f1a", fontSize: 14, fontWeight: 700, textDecoration: "none", letterSpacing: "0.02em" }}>
+              Try it now
+            </a>
+            <a href="#docs" style={{ padding: "12px 28px", borderRadius: 8, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: "white", fontSize: 14, fontWeight: 600, textDecoration: "none" }}>
+              Documentation
+            </a>
+          </div>
         </div>
-        <h1 style={{ fontSize: 40, fontWeight: 800, margin: "0 0 12px", letterSpacing: "-0.02em", background: "linear-gradient(135deg, #fff 0%, rgba(255,255,255,0.6) 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-          FlixWorld Embed API
-        </h1>
-        <p style={{ fontSize: 16, color: "rgba(255,255,255,0.45)", maxWidth: 520, margin: "0 auto", lineHeight: 1.6 }}>
-          Embed HLS movie and TV streams into any page with a single iframe. Subtitles, thumbnail scrubbing, and quality selection included.
-        </p>
       </div>
 
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "40px 24px" }}>
+      {/* ── Live Test ── */}
+      <div id="test" style={{ maxWidth: 960, margin: "0 auto", padding: "0 24px 64px" }}>
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <h2 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 8 }}>Live Player Test</h2>
+          <p style={{ fontSize: 14, color: "rgba(255,255,255,0.4)" }}>Enter a TMDB ID to preview the embed player instantly</p>
+        </div>
+        <ApiTester />
+      </div>
 
-        {/* ── Live Tester (client component) ── */}
-        <section style={{ marginBottom: 48 }}>
-          <h2 style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.35)", marginBottom: 16 }}>Live Test</h2>
-          <ApiTester />
-        </section>
-
-        {/* ── Endpoints ── */}
-        <section style={{ marginBottom: 48 }}>
-          <h2 style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.35)", marginBottom: 16 }}>Embed URLs</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* ── Features ── */}
+      <div style={{ background: "rgba(255,255,255,0.02)", borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "56px 24px" }}>
+        <div style={{ maxWidth: 960, margin: "0 auto" }}>
+          <h2 style={{ fontSize: 22, fontWeight: 700, textAlign: "center", marginBottom: 40 }}>Everything you need to stream</h2>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 20 }}>
             {[
-              {
-                method: "Movie",
-                color: "#a78bfa",
-                bg: "rgba(139,92,246,0.12)",
-                border: "rgba(139,92,246,0.25)",
-                url: "/embed/movie/{tmdb_id}",
-                example: "/embed/movie/550",
-                desc: "Embed a movie stream by TMDB ID",
-              },
-              {
-                method: "TV",
-                color: "#60a5fa",
-                bg: "rgba(59,130,246,0.12)",
-                border: "rgba(59,130,246,0.25)",
-                url: "/embed/tv/{tmdb_id}/{season}/{episode}",
-                example: "/embed/tv/94997/1/1",
-                desc: "Embed a TV episode by TMDB ID, season and episode number",
-              },
-            ].map(({ method, color, bg, border, url, example, desc }) => (
-              <div key={method} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: "16px 20px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-                  <span style={{ background: bg, border: `1px solid ${border}`, color, fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", padding: "2px 10px", borderRadius: 6 }}>{method}</span>
-                  <code style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", fontFamily: "monospace" }}>{url}</code>
+              { icon: "movie", title: "Movies", desc: "Full movie library via TMDB ID" },
+              { icon: "tv", title: "TV Shows", desc: "Any season and episode by number" },
+              { icon: "closed_caption", title: "Subtitles", desc: "Multi-language VTT subtitles included" },
+              { icon: "hd", title: "HD Quality", desc: "Auto quality selection up to 1080p" },
+              { icon: "schedule", title: "Resume Playback", desc: "Watch progress saved locally" },
+              { icon: "code", title: "Single iframe", desc: "One line of HTML to embed anywhere" },
+            ].map(({ icon, title, desc }) => (
+              <div key={title} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: "20px" }}>
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.2)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
+                  <span className="material-symbols-rounded" style={{ fontSize: 20, color: "#f5c518" }}>{icon}</span>
                 </div>
-                <p style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", margin: 0 }}>{desc}</p>
-                <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>Example:</span>
-                  <code style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", fontFamily: "monospace" }}>{example}</code>
-                </div>
+                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{title}</div>
+                <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>{desc}</div>
               </div>
             ))}
           </div>
-        </section>
+        </div>
+      </div>
 
-        {/* ── Parameters ── */}
-        <section style={{ marginBottom: 48 }}>
-          <h2 style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.35)", marginBottom: 16 }}>Parameters</h2>
-          <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, overflow: "hidden" }}>
+      {/* ── Docs ── */}
+      <div id="docs" style={{ maxWidth: 960, margin: "0 auto", padding: "56px 24px" }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 32 }}>API Reference</h2>
+
+        {/* Endpoints */}
+        <div style={{ marginBottom: 40 }}>
+          <h3 style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.35)", marginBottom: 14 }}>Embed URLs</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {[
-              { param: "tmdb_id", type: "number", required: true,  desc: "TMDB content ID — find it at themoviedb.org" },
-              { param: "season",  type: "number", required: true,  desc: "Season number (TV only, starts at 1)" },
-              { param: "episode", type: "number", required: true,  desc: "Episode number (TV only, starts at 1)" },
-            ].map(({ param, type, required, desc }, i, arr) => (
-              <div key={param} style={{ display: "grid", gridTemplateColumns: "140px 70px 1fr", alignItems: "center", gap: 16, padding: "12px 20px", borderBottom: i < arr.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
-                <code style={{ fontSize: 13, color: "#a78bfa", fontFamily: "monospace" }}>{param}</code>
-                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", background: "rgba(255,255,255,0.05)", borderRadius: 4, padding: "1px 7px", textAlign: "center" }}>{type}</span>
-                <span style={{ fontSize: 13, color: "rgba(255,255,255,0.5)" }}>
-                  {required && <span style={{ color: "#f87171", fontSize: 10, fontWeight: 700, marginRight: 6 }}>REQUIRED</span>}
-                  {desc}
-                </span>
+              { badge: "MOVIE", color: "#a78bfa", bg: "rgba(139,92,246,0.12)", border: "rgba(139,92,246,0.25)", url: "/embed/movie/{tmdb_id}", example: "/embed/movie/550" },
+              { badge: "TV", color: "#60a5fa", bg: "rgba(59,130,246,0.12)", border: "rgba(59,130,246,0.25)", url: "/embed/tv/{tmdb_id}/{season}/{episode}", example: "/embed/tv/94997/1/1" },
+            ].map(({ badge, color, bg, border, url, example }) => (
+              <div key={badge} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 18px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <span style={{ background: bg, border: `1px solid ${border}`, color, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", padding: "2px 8px", borderRadius: 5 }}>{badge}</span>
+                  <code style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", fontFamily: "monospace" }}>{url}</code>
+                </div>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", fontFamily: "monospace" }}>Example: {example}</div>
               </div>
             ))}
           </div>
-        </section>
+        </div>
       </div>
 
       {/* ── Footer ── */}
-      <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "20px 24px", textAlign: "center" }}>
-        <span style={{ fontSize: 12, color: "rgba(255,255,255,0.2)" }}>
+      <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "24px", textAlign: "center" }}>
+        <span style={{ fontSize: 13, color: "rgba(255,255,255,0.25)" }}>
           Powered by{" "}
           <a href="https://flixworld.xyz" target="_blank" rel="noopener noreferrer"
-            style={{ color: "rgba(255,255,255,0.45)", textDecoration: "none", borderBottom: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ color: "rgba(245,197,24,0.7)", textDecoration: "none" }}>
             Flixworld.xyz
           </a>
         </span>

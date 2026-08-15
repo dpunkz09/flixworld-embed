@@ -12,10 +12,21 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   try {
     const stream = await fetchMovieStream(id);
     if (stream.status_code === "200" && stream.data.title) {
-      return { title: stream.data.title };
+      const title = stream.data.title;
+      return {
+        title,
+        description: `Watch ${title} online. Free HD streaming with subtitles.`,
+        openGraph: {
+          title,
+          description: `Watch ${title} online. Free HD streaming with subtitles.`,
+          images: stream.data.backdrop ? [{ url: stream.data.backdrop }] : [],
+          type: "video.movie",
+        },
+        robots: { index: false, follow: false }, // embed pages shouldn't be indexed
+      };
     }
-  } catch { /* fall through to default */ }
-  return { title: "Movie Player" };
+  } catch { /* fall through */ }
+  return { title: "Movie Player", robots: { index: false, follow: false } };
 }
 
 export default async function MovieEmbed({ params }: Props) {

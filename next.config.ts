@@ -18,13 +18,12 @@ const nextConfig: NextConfig = {
         headers: [
           { key: "X-Frame-Options", value: "ALLOWALL" },
           { key: "Content-Security-Policy", value: "frame-ancestors *" },
-        ],
-      },
-      {
-        // Cache static assets aggressively
-        source: "/_next/static/:path*",
-        headers: [
-          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+          // Suppress the browser's Permissions-Policy violation for `unload`,
+          // which JW Player's CDN scripts attempt to register internally.
+          // The `unload` event is deprecated and blocked in cross-origin iframes
+          // by default; this header silences the console warning without
+          // affecting playback or functionality.
+          { key: "Permissions-Policy", value: "unload=()" },
         ],
       },
     ];

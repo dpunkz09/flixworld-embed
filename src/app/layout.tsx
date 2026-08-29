@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Analytics } from "@vercel/analytics/next";
 
 const SITE_NAME = "Flixworld API";
 const SITE_URL = "https://embed.flixworld.xyz";
@@ -64,7 +63,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <Analytics />
         {children}
       </body>
     </html>

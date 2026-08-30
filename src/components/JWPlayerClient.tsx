@@ -10,6 +10,49 @@ import {
   type ServerState,
 } from "@/lib/servers";
 
+// ---------------------------------------------------------------------------
+// Adsterra popunder
+// Injected once on mount. Skipped when the embed is loaded inside flixworld.xyz
+// (detected via document.referrer and window.location.ancestorOrigins).
+// ---------------------------------------------------------------------------
+
+const AD_SCRIPT_URL   = "https://pl31093554.profitableratecpmnetwork.com/e9/3a/8c/e93a8c3c968c832432d59d4ccac84e46.js";
+const AD_EXEMPT_HOST  = "flixworld.xyz";
+
+function isExemptFromAds(): boolean {
+  try {
+    // Check the referrer (set by the parent page in most browsers)
+    if (document.referrer) {
+      const ref = new URL(document.referrer);
+      if (ref.hostname === AD_EXEMPT_HOST || ref.hostname.endsWith(`.${AD_EXEMPT_HOST}`)) {
+        return true;
+      }
+    }
+    // Check ancestorOrigins (Chromium only — not available in Firefox/Safari)
+    const ancestors = window.location.ancestorOrigins;
+    if (ancestors) {
+      for (let i = 0; i < ancestors.length; i++) {
+        const origin = new URL(ancestors[i]);
+        if (origin.hostname === AD_EXEMPT_HOST || origin.hostname.endsWith(`.${AD_EXEMPT_HOST}`)) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    // Malformed URL or cross-origin restriction — fail open (show ads)
+  }
+  return false;
+}
+
+function injectAdScript() {
+  if (isExemptFromAds()) return;
+  if (document.querySelector(`script[src="${AD_SCRIPT_URL}"]`)) return; // already injected
+  const s = document.createElement("script");
+  s.src   = AD_SCRIPT_URL;
+  s.async = true;
+  document.head.appendChild(s);
+}
+
 // JW Player uses browser-only APIs — disable SSR entirely.
 const JWPlayer = dynamic(() => import("./JWPlayer"), {
   ssr: false,
@@ -53,44 +96,84 @@ export default function JWPlayerClient({ data }: Props) {
     })),
   );
 
-  // ── Active server — starts with first def (gama/Vidzee, instant) ──────
+  // ── Active server — starts with first def (alfa/Videasy, instant) ─────
   const [activeServerId, setActiveServerId] = useState<string>(SERVER_DEFS[0].id);
 
   // ── Active sources/subtitles fed to JWPlayer ───────────────────────────
   const [activeSources,   setActiveSources]   = useState<StreamSource[]>(data.sources);
   const [activeSubtitles, setActiveSubtitles] = useState<SubtitleTrack[]>(data.subtitles);
 
-  // Assign synchronously in the render body — avoids the one-render lag
-  // that a useEffect sync would introduce, ensuring handleServerSelect
-  // always reads the latest state.
-  const serversRef = useRef(servers);
-  serversRef.current = servers;
+  // Synchronous ref — always reflects the latest servers state without
+  // the one-render lag a useEffect sync would introduce.
+  const serversRef      = useRef(servers);
+  serversRef.current    = servers;
 
-  // ── Preload all servers in parallel on mount ───────────────────────────
-  useEffect(() => {
-    const cancel = preloadServers(data, setServers);
-    return cancel;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Track whether the default server has already been overridden by the
+  // auto-fallback so we don't repeatedly switch on every preload update.
+  const autoFallenBackRef = useRef(false);
 
-  // ── Server selection ───────────────────────────────────────────────────
-  const handleServerSelect = useCallback((id: string) => {
-    const state = serversRef.current.find((s) => s.id === id);
-    if (!state?.result) return;
+  // Track which server id is currently active inside callbacks.
+  const activeServerIdRef = useRef(activeServerId);
+  activeServerIdRef.current = activeServerId;
 
+  // ── Shared select logic (used by auto-fallback + manual selection) ─────
+  const applyServer = useCallback((state: ServerState) => {
+    if (!state.result) return;
     const best = pickBestSource(state.result);
     setActiveSources([best]);
-
-    // ServerSubtitle.url → SubtitleTrack.file
     setActiveSubtitles(
       state.result.subtitles.map((s) => ({
         file:  s.url,
         label: s.label,
       })),
     );
-
-    setActiveServerId(id);
+    setActiveServerId(state.id);
   }, []);
+
+  // ── Preload all servers in parallel on mount ───────────────────────────
+  useEffect(() => {
+    // Inject popunder ad (skipped when embedded on flixworld.xyz)
+    injectAdScript();
+
+    const cancel = preloadServers(data, (updated) => {
+      setServers(updated);
+
+      // Auto-fallback: if the current active server has no sources yet
+      // (default server returned empty / errored), switch to the first
+      // ready server in list order — preserving the user's manual choice
+      // once they've picked something.
+      if (autoFallenBackRef.current) return;
+
+      const currentId     = activeServerIdRef.current;
+      const currentState  = updated.find((s) => s.id === currentId);
+      const defaultHasNoSources =
+        !currentState?.result?.sources.length &&
+        (currentState?.status === "error" || currentState?.status === "ready");
+
+      if (!defaultHasNoSources) return;
+
+      // Find the next server in list order that is already ready with sources
+      const fallback = updated.find(
+        (s) => s.id !== currentId && s.status === "ready" && (s.result?.sources.length ?? 0) > 0,
+      );
+
+      if (fallback) {
+        autoFallenBackRef.current = true;
+        applyServer(fallback);
+      }
+    });
+    return cancel;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Manual server selection ────────────────────────────────────────────
+  const handleServerSelect = useCallback((id: string) => {
+    const state = serversRef.current.find((s) => s.id === id);
+    if (!state?.result) return;
+    // Manual pick disables further auto-fallback
+    autoFallenBackRef.current = true;
+    applyServer(state);
+  }, [applyServer]);
 
   return (
     <JWPlayer

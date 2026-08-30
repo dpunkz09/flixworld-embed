@@ -46,11 +46,28 @@ function isExemptFromAds(): boolean {
 
 function injectAdScript() {
   if (isExemptFromAds()) return;
-  if (document.querySelector(`script[src="${AD_SCRIPT_URL}"]`)) return; // already injected
+
+  // Popunder ads work by intercepting clicks on the top-level document.
+  // When this embed is inside an iframe, we must inject into the parent
+  // page's document — not the iframe's — otherwise click events never
+  // reach the ad script and the popunder never fires.
+  // If window.top is cross-origin (security restriction), fall back to
+  // injecting into the iframe document itself (less effective but still works
+  // for direct embed.flixworld.xyz visits).
+  let targetDoc: Document;
+  try {
+    // Accessing window.top.document throws a SecurityError when cross-origin
+    targetDoc = (window.top ?? window).document;
+  } catch {
+    targetDoc = document;
+  }
+
+  if (targetDoc.querySelector(`script[src="${AD_SCRIPT_URL}"]`)) return;
+
   const s = document.createElement("script");
   s.src   = AD_SCRIPT_URL;
   s.async = true;
-  document.head.appendChild(s);
+  targetDoc.head.appendChild(s);
 }
 
 // JW Player uses browser-only APIs — disable SSR entirely.

@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 
 type Mode = "movie" | "tv";
 
-const DEFAULT_IDS: Record<Mode, string> = { movie: "1339713", tv: "94997" };
+const DEFAULT_IDS: Record<Mode, string> = { movie: "1628071", tv: "108978" };
 
 export default function ApiTester() {
   const [mode, setMode] = useState<Mode>("movie");

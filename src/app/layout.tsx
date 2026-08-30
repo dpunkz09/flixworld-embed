@@ -54,7 +54,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <head>
         {/* Preconnect to reduce font TTFB */}
-        <script src="https://pl31093554.profitableratecpmnetwork.com/e9/3a/8c/e93a8c3c968c832432d59d4ccac84e46.js"></script>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         {/* Narrow axes to reduce payload — filled, weight 400 only */}

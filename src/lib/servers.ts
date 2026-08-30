@@ -1,12 +1,14 @@
 /**
  * Server registry + preload logic for the server-switching overlay.
  *
- * Two top-level backends are defined:
- *   1. Vidzee      — reuses the server-side sources already in StreamData (instant)
- *   2. RiveStream  — fetches from the Cloudflare Worker; the single response is
- *                    then split into one entry per CDN sub-server
- *                    (e.g. "RiveStream • Quasar", "RiveStream • PrimeVids", …)
- *                    so each appears as its own selectable row in the overlay.
+ * All servers call https://mp4-server.jpaworx.com/stream/{key}/{movie|tv}/...
+ * They share the same response shape as the existing Vidzee endpoint so no
+ * new types are needed on the api.ts side.
+ *
+ * The first server (gama / Vidzee) reuses the sources already fetched
+ * server-side and passed in via StreamData — instant, no extra request.
+ * Every other server is fetched client-side during preload and resolves
+ * independently so the UI updates incrementally.
  */
 
 import type { StreamData, StreamSource } from "./api";
@@ -22,7 +24,6 @@ export interface ServerSource {
   quality: string;
   server: string;
   type: "hls" | "mp4";
-  headers?: Record<string, string>;
 }
 
 export interface ServerSubtitle {
@@ -39,7 +40,6 @@ export interface ServerResult {
 export interface ServerState {
   id: string;
   label: string;
-  /** Short tag shown on the badge */
   tag: string;
   status: ServerStatus;
   result: ServerResult | null;
@@ -50,275 +50,270 @@ export interface ServerDef {
   id: string;
   label: string;
   tag: string;
-  fetch: (data: StreamData) => Promise<ServerResult | null>;
+  /** jpaworx stream key, e.g. "vidzee", "allmovies" */
+  key: string;
+  fetch: (data: StreamData, signal?: AbortSignal) => Promise<ServerResult | null>;
 }
 
 // ---------------------------------------------------------------------------
-// Worker URL
+// Raw API response shape (shared across all servers)
 // ---------------------------------------------------------------------------
 
-const WORKER_URL =
-  (typeof process !== "undefined" &&
-    (process.env.NEXT_PUBLIC_OTT_WORKER_URL ||
-      process.env.OTT_WORKER_URL)) ||
-  "https://ott-worker.dpunkz09.workers.dev";
-
-// ---------------------------------------------------------------------------
-// Raw worker response shape
-// ---------------------------------------------------------------------------
-
-interface WorkerSource {
+interface JpaStream {
   url: string;
-  quality: string;
-  server: string;
   type: string;
-  headers?: Record<string, string>;
+  language: string;
+  quality?: string;
 }
 
-interface WorkerResponse {
+/** Source entry used by servers like ophim (klikxxi) that return `sources[]` */
+interface JpaSource {
+  url: string;
+  type: string;
+  quality?: string;
+}
+
+interface JpaExtracted {
+  /** Present on most servers */
+  streams?: JpaStream[];
+  /** Present on ophim/klikxxi — same concept, different key */
+  sources?: JpaSource[];
+  /** Present on catflix/alfa/zeta/filxer — direct URL with no array */
+  url?: string;
+  /** HLS flag set by catflix / videasy / zeta */
+  type?: string;
+  /** Multiple quality variants — zeta (nextgencloudfabric) */
+  all_urls?: string[];
+}
+
+interface JpaResponse {
   ok: boolean;
-  sources?: WorkerSource[];
+  extracted?: JpaExtracted;
 }
 
 // ---------------------------------------------------------------------------
-// Helper: extract the sub-server name from a full server string
-//
-//   "RiveStream • Quasar"  → "Quasar"
-//   "RiveStream • PrimeVids" → "PrimeVids"
-//   "RiveStream • Citadel" → "Citadel"
-//   "Quasar"               → "Quasar"   (fallback — already short)
+// Shared fetch helper
 // ---------------------------------------------------------------------------
 
-function subServerName(raw: string): string {
-  const bullet = raw.indexOf("•");
-  if (bullet !== -1) return raw.slice(bullet + 1).trim();
-  return raw.trim();
+function buildUrl(key: string, data: StreamData): string {
+  const isTV = data.mediaType === "tv" || !!data.season;
+  const qs = new URLSearchParams({ key, type: isTV ? "tv" : "movie", tmdbId: data.tmdbId });
+  if (isTV) {
+    qs.set("season",  data.season  ?? "1");
+    qs.set("episode", data.episode ?? "1");
+  }
+  return `/api/stream?${qs}`;
 }
 
-// Stable display order for known sub-servers
-const SUB_SERVER_ORDER = ["Quasar", "PrimeVids", "Citadel", "HindiCast", "FlowCast"];
+async function fetchJpa(
+  key: string,
+  data: StreamData,
+  signal?: AbortSignal,
+): Promise<JpaStream[] | null> {
+  const url = buildUrl(key, data);
+  try {
+    // Combine caller's signal with a per-request timeout
+    const timeout = AbortSignal.timeout(20_000);
+    const combined = signal
+      ? AbortSignal.any([signal, timeout])
+      : timeout;
 
-function subServerOrder(name: string): number {
-  const idx = SUB_SERVER_ORDER.indexOf(name);
-  return idx === -1 ? SUB_SERVER_ORDER.length : idx;
+    const res = await fetch(url, { signal: combined });
+    if (!res.ok) return null;
+    const json = (await res.json()) as JpaResponse;
+    if (!json.ok || !json.extracted) return null;
+
+    const ext = json.extracted;
+
+    // ── streams[] — most servers ──────────────────────────────────────────
+    if (ext.streams?.length) return ext.streams;
+
+    // ── sources[] — ophim/klikxxi ─────────────────────────────────────────
+    if (ext.sources?.length) {
+      return ext.sources
+        .filter((s) => s.url)
+        .map((s) => ({
+          url:      s.url,
+          type:     s.type ?? "hls",
+          // JpaSource has no language field; use quality as the display label
+          language: s.quality ?? "Auto",
+          quality:  s.quality,
+        }));
+    }
+
+    // ── flat url — catflix/buzz, alfa/videasy, filxer/rogflix, zeta ───────
+    if (ext.url) {
+      // zeta has all_urls[] with multiple quality variants — use those first
+      if (ext.all_urls?.length) {
+        return ext.all_urls.map((u, i) => ({
+          url:      u,
+          type:     ext.type ?? (u.includes(".m3u8") ? "hls" : "mp4"),
+          language: `Quality ${i + 1}`,
+          quality:  `${i + 1}`,
+        }));
+      }
+
+      return [{
+        url:      ext.url,
+        type:     ext.type ?? (ext.url.includes(".m3u8") ? "hls" : "mp4"),
+        language: "Auto",
+      }];
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
-// Tag badge per sub-server
-function subServerTag(name: string): string {
-  if (name === "Quasar")    return "HLS";
-  if (name === "PrimeVids") return "CDN";
-  if (name === "Citadel")   return "HLS";
-  if (name === "HindiCast") return "HI";
-  if (name === "FlowCast")  return "MP4";
-  return "HLS";
+function toServerResult(
+  streams: JpaStream[],
+  label: string,
+  data: StreamData,
+): ServerResult {
+  // vdrk.site subtitles already in data — reuse for every server
+  const subtitles: ServerSubtitle[] = (data.subtitles ?? []).map((s) => ({
+    url:   s.file,
+    label: s.label,
+    lang:  "en",
+  }));
+
+  const sources: ServerSource[] = streams
+    .filter((s) => s.url)
+    .map((s) => {
+      // Primary: trust the type string from the API
+      // Fallback: sniff from URL — .m3u8 extension, or HLS path segments (/hls/, /hls2/, /hls3/)
+      const hlsType =
+        s.type === "hls" ||
+        s.type === "m3u8" ||
+        s.type === "application/x-mpegurl";
+      const hlsUrl =
+        s.url.includes(".m3u8") ||
+        /\/hls\d*\//i.test(s.url);
+      return {
+        url:     s.url,
+        quality: s.quality ?? s.language ?? "Auto",
+        server:  label,
+        type:    (hlsType || hlsUrl ? "hls" : "mp4") as "hls" | "mp4",
+      };
+    });
+
+  return { sources, subtitles };
 }
 
 // ---------------------------------------------------------------------------
 // Server definitions
 // ---------------------------------------------------------------------------
 
-const vidzeeServer: ServerDef = {
-  id: "vidzee",
-  label: "Vidzee",
-  tag: "HD",
-  fetch: async (data) => {
-    if (!data.sources.length) return null;
-    return {
-      sources: data.sources.map((s) => ({
-        url: s.url,
-        quality: s.language ?? "Auto",
-        server: "Vidzee",
-        type: "mp4" as const,
-      })),
-      subtitles: (data.subtitles ?? []).map((s) => ({
-        url: s.file,
-        label: s.label,
-        lang: "en",
-      })),
-    };
-  },
-};
+const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string }> = [
+  { id: "gama",    label: "Gama",    tag: "HD",    key: "vidzee"             },
+  { id: "alfa",    label: "Alfa",    tag: "HD",    key: "videasy"            },
+  { id: "catflix", label: "Catflix", tag: "HD",    key: "buzz"               },
+  { id: "lamda",   label: "Lamda",   tag: "MULTI", key: "allmovies"          },
+  { id: "hexa",    label: "Hexa",    tag: "HD",    key: "vidlink"            },
+  { id: "ophim",   label: "Ophim",   tag: "HD",    key: "klikxxi"            },
+  { id: "beta",    label: "Beta",    tag: "HD",    key: "vidxyz"             },
+  { id: "sigma",   label: "Sigma",   tag: "HD",    key: "hollymoviehd"       },
+  { id: "filxer",  label: "Filxer",  tag: "HD",    key: "rogflix"            },
+  { id: "zeta",    label: "Zeta",    tag: "HD",    key: "nextgencloudfabric" },
+];
 
 /**
- * Placeholder entry — used only to show a loading spinner in the panel
- * while the real worker fetch is in flight. `preloadServers` replaces this
- * with individual sub-server entries once the worker responds.
+ * Build a ServerDef for a given entry.
+ * The first entry (gama/vidzee) reuses data.sources — instant, no request.
+ * All others call the jpaworx API.
  */
-const riveStreamPlaceholder: ServerDef = {
-  id: "rivestream",
-  label: "RiveStream",
-  tag: "HLS",
-  // fetch is never actually called by preloadServers — the function handles
-  // RiveStream specially so it can expand into multiple entries.
-  fetch: async () => null,
-};
+function makeDef(
+  entry: (typeof SERVER_LIST)[number],
+  isDefault: boolean,
+): ServerDef {
+  return {
+    ...entry,
+    fetch: async (data: StreamData, signal?: AbortSignal) => {
+      if (isDefault) {
+        if (!data.sources.length) return null;
+        return toServerResult(
+          data.sources.map((s) => ({
+            url:      s.url,
+            // Carry through the type set by api.ts; fall back to URL sniffing
+            type:     s.type ?? (s.url.includes(".m3u8") ? "hls" : "mp4"),
+            language: s.language ?? "Auto",
+          })),
+          entry.label,
+          data,
+        );
+      }
 
-export const SERVER_DEFS: ServerDef[] = [vidzeeServer, riveStreamPlaceholder];
-
-// ---------------------------------------------------------------------------
-// Fetch the worker and split sources into per-sub-server ServerResults
-// ---------------------------------------------------------------------------
-
-async function fetchRiveStreamSubServers(
-  data: StreamData,
-): Promise<Map<string, ServerResult>> {
-  const id = data.imdbId ?? data.tmdbId;
-  if (!id) return new Map();
-
-  // Treat as TV if mediaType says so OR if season/episode are present —
-  // guards against stale cache entries that predate the mediaType field.
-  const isMovie = data.mediaType === "tv" || data.season
-    ? false
-    : (data.mediaType ?? "movie") === "movie";
-
-  let url: string;
-
-  if (isMovie) {
-    const qs = new URLSearchParams({ tmdbId: data.tmdbId });
-    if (data.imdbId) qs.set("imdbId", data.imdbId);
-    url = `${WORKER_URL}/movie/${encodeURIComponent(id)}?${qs}`;
-  } else {
-    const season = data.season ?? "1";
-    const episode = data.episode ?? "1";
-    const qs = new URLSearchParams({ tmdbId: data.tmdbId, season, episode });
-    if (data.imdbId) qs.set("imdbId", data.imdbId);
-    url = `${WORKER_URL}/tv/${encodeURIComponent(id)}/${season}/${episode}?${qs}`;
-  }
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(40_000) });
-  if (!res.ok) return new Map();
-
-  const json = (await res.json()) as WorkerResponse;
-  if (!json.ok || !json.sources?.length) return new Map();
-
-  // Always use vdrk.site subtitles (already in data.subtitles from server-side fetch).
-  // Worker subtitles are ignored — vdrk.site is the canonical subtitle source for all servers.
-  const subtitles: ServerSubtitle[] = (data.subtitles ?? []).map((s) => ({
-    url: s.file,
-    label: s.label,
-    lang: "en",
-  }));
-
-  // Group sources by sub-server name
-  const groups = new Map<string, ServerSource[]>();
-  for (const s of json.sources) {
-    if (!s.url) continue;
-    const name = subServerName(s.server ?? "RiveStream");
-    if (!groups.has(name)) groups.set(name, []);
-    groups.get(name)!.push({
-      url: s.url,
-      quality: s.quality ?? "Auto",
-      server: name,
-      type: (s.type === "hls" ? "hls" : "mp4") as "hls" | "mp4",
-      ...(s.headers ? { headers: s.headers } : {}),
-    });
-  }
-
-  // Build a ServerResult per group; all share the same subtitles
-  const results = new Map<string, ServerResult>();
-  for (const [name, sources] of groups) {
-    results.set(name, { sources, subtitles });
-  }
-  return results;
+      const streams = await fetchJpa(entry.key, data, signal);
+      if (!streams) return null;
+      return toServerResult(streams, entry.label, data);
+    },
+  };
 }
 
+export const SERVER_DEFS: ServerDef[] = SERVER_LIST.map((entry, i) =>
+  makeDef(entry, i === 0),
+);
+
 // ---------------------------------------------------------------------------
-// Preloader — fires all fetches in parallel, calls onUpdate incrementally
+// Preloader
+// Fires all server fetches in parallel. Returns a cancel function that
+// aborts every in-flight request immediately (not just a flag-flip).
 // ---------------------------------------------------------------------------
 
 export function preloadServers(
   data: StreamData,
   onUpdate: (states: ServerState[]) => void,
 ): () => void {
-  // Start with Vidzee loading + RiveStream placeholder loading
-  const states: ServerState[] = SERVER_DEFS.map((def) => ({
-    id: def.id,
-    label: def.label,
-    tag: def.tag,
+  // Single controller aborts all concurrent fetches on cancel
+  const controller = new AbortController();
+
+  let states: ServerState[] = SERVER_DEFS.map((def) => ({
+    id:     def.id,
+    label:  def.label,
+    tag:    def.tag,
     status: "loading" as const,
     result: null,
   }));
 
   onUpdate([...states]);
 
-  let cancelled = false;
-
-  // ── Vidzee (index 0) ──────────────────────────────────────────────────
-  vidzeeServer
-    .fetch(data)
-    .then((result) => {
-      if (cancelled) return;
-      states[0] = {
-        ...states[0],
-        status: result ? "ready" : "error",
-        result,
-        error: result ? undefined : "No sources available",
-      };
-      onUpdate([...states]);
-    })
-    .catch(() => {
-      if (cancelled) return;
-      states[0] = { ...states[0], status: "error", result: null, error: "Failed" };
-      onUpdate([...states]);
-    });
-
-  // ── RiveStream sub-servers (replaces placeholder at index 1) ──────────
-  fetchRiveStreamSubServers(data)
-    .then((subServers) => {
-      if (cancelled) return;
-
-      if (subServers.size === 0) {
-        // Nothing came back — mark placeholder as error
-        states[1] = { ...states[1], status: "error", result: null, error: "No sources available" };
+  SERVER_DEFS.forEach((def, idx) => {
+    def
+      .fetch(data, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        // Immutable update — avoids shared-mutation fragility
+        states = states.map((s, i) =>
+          i === idx
+            ? { ...s, status: result ? "ready" : "error", result, error: result ? undefined : "No sources" }
+            : s,
+        );
         onUpdate([...states]);
-        return;
-      }
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        states = states.map((s, i) =>
+          i === idx ? { ...s, status: "error", result: null, error: "Failed" } : s,
+        );
+        onUpdate([...states]);
+      });
+  });
 
-      // Sort sub-servers into a stable display order, then build new states
-      const sorted = [...subServers.entries()].sort(
-        ([a], [b]) => subServerOrder(a) - subServerOrder(b),
-      );
-
-      // Replace the placeholder (index 1) with the first sub-server,
-      // then append the rest
-      const newEntries: ServerState[] = sorted.map(([name, result]) => ({
-        id: `rivestream:${name}`,
-        label: `RiveStream • ${name}`,
-        tag: subServerTag(name),
-        status: "ready" as const,
-        result,
-      }));
-
-      // Splice: remove the placeholder, insert all sub-server entries
-      states.splice(1, 1, ...newEntries);
-      onUpdate([...states]);
-    })
-    .catch(() => {
-      if (cancelled) return;
-      states[1] = { ...states[1], status: "error", result: null, error: "Failed" };
-      onUpdate([...states]);
-    });
-
-  return () => { cancelled = true; };
+  return () => controller.abort();
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helper — pick highest-quality source from a ServerResult
 // ---------------------------------------------------------------------------
 
-/**
- * Pick the best single source from a ServerResult.
- * Sorts by highest numeric quality, falls back to first entry.
- */
 export function pickBestSource(result: ServerResult): StreamSource {
   const ranked = [...result.sources].sort((a, b) => {
-    const qa = parseInt(a.quality) || 0;
-    const qb = parseInt(b.quality) || 0;
+    // parseInt with radix 10; non-numeric strings (e.g. "Auto", "HD") → 0
+    const qa = parseInt(a.quality, 10) || 0;
+    const qb = parseInt(b.quality, 10) || 0;
     return qb - qa;
   });
   const best = ranked[0];
-  return {
-    url: best.url,
-    language: best.quality,
-  };
+  return { url: best.url, language: best.quality, type: best.type };
 }

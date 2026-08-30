@@ -8,7 +8,6 @@ import {
   pickBestSource,
   SERVER_DEFS,
   type ServerState,
-  type ServerSubtitle,
 } from "@/lib/servers";
 
 // JW Player uses browser-only APIs — disable SSR entirely.
@@ -43,7 +42,7 @@ interface Props {
 }
 
 export default function JWPlayerClient({ data }: Props) {
-  // ── Server states — one entry per SERVER_DEF, updated as fetches resolve ──
+  // ── Server states ──────────────────────────────────────────────────────
   const [servers, setServers] = useState<ServerState[]>(() =>
     SERVER_DEFS.map((def) => ({
       id:     def.id,
@@ -54,49 +53,42 @@ export default function JWPlayerClient({ data }: Props) {
     })),
   );
 
-  // ── Active server id — starts with Vidzee (first def, already available) ──
+  // ── Active server — starts with first def (gama/Vidzee, instant) ──────
   const [activeServerId, setActiveServerId] = useState<string>(SERVER_DEFS[0].id);
 
-  // ── Active sources/subtitles fed to JWPlayer ──────────────────────────
-  const [activeSources, setActiveSources] = useState<StreamSource[]>(
-    data.sources,
-  );
-  const [activeSubtitles, setActiveSubtitles] = useState<SubtitleTrack[]>(
-    data.subtitles,
-  );
+  // ── Active sources/subtitles fed to JWPlayer ───────────────────────────
+  const [activeSources,   setActiveSources]   = useState<StreamSource[]>(data.sources);
+  const [activeSubtitles, setActiveSubtitles] = useState<SubtitleTrack[]>(data.subtitles);
 
-  // Keep a stable ref to servers so onSelect can read latest state
+  // Assign synchronously in the render body — avoids the one-render lag
+  // that a useEffect sync would introduce, ensuring handleServerSelect
+  // always reads the latest state.
   const serversRef = useRef(servers);
-  useEffect(() => { serversRef.current = servers; }, [servers]);
+  serversRef.current = servers;
 
-  // ── Preload all servers in parallel once the component mounts ─────────
+  // ── Preload all servers in parallel on mount ───────────────────────────
   useEffect(() => {
-    const cancel = preloadServers(data, (updated) => {
-      setServers(updated);
-
-      // Promote Vidzee to "ready" immediately using the data we already have
-      // (preloadServers calls vidzee.fetch which just wraps data.sources, so
-      // this is instant — but we still need the state update to flip "loading"→"ready")
-    });
+    const cancel = preloadServers(data, setServers);
     return cancel;
-    // data is stable (server-rendered, never changes between renders)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Handle server selection ────────────────────────────────────────────
+  // ── Server selection ───────────────────────────────────────────────────
   const handleServerSelect = useCallback((id: string) => {
     const state = serversRef.current.find((s) => s.id === id);
     if (!state?.result) return;
 
     const best = pickBestSource(state.result);
     setActiveSources([best]);
-    // Map ServerSubtitle → SubtitleTrack ({file, label})
+
+    // ServerSubtitle.url → SubtitleTrack.file
     setActiveSubtitles(
-      state.result.subtitles.map((s: ServerSubtitle) => ({
-        file: s.url,
+      state.result.subtitles.map((s) => ({
+        file:  s.url,
         label: s.label,
       })),
     );
+
     setActiveServerId(id);
   }, []);
 

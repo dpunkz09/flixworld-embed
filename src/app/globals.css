@@ -28,16 +28,19 @@ body {
   background: #000;
 }
 
-/* Embed pages need a locked viewport — applied via the .embed-page class on the body */
-body.embed-page {
-  height: 100%;
-  overflow: hidden;
+/* ServerOverlay chip hover — CSS class avoids direct style mutation in React */
+.srv-chip-hover:hover {
+  background: rgba(255, 255, 255, 0.09) !important;
 }
 
-body.embed-page > div,
-body.embed-page > div > div {
-  width: 100%;
-  height: 100%;
+/* ServerOverlay + TitleOverlay animations */
+@keyframes srv-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes srv-slidein {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    }
 }
 
 /* Hide Next.js devtools floating badge */

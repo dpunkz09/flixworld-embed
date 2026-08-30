@@ -3,12 +3,25 @@ import { NextRequest, NextResponse } from "next/server";
 const API_KEY = process.env.STREAM_API_KEY ?? "";
 
 /**
- * Proxy for subtitle files that require the API key.
+ * Allowed origins for subtitle proxying.
+ * Prevents this route being used as an open SSRF proxy for arbitrary URLs.
+ */
+const ALLOWED_ORIGINS = new Set([
+  "api.flixworld.xyz",
+  "cache.vdrk.site",
+  "sub.wyzie.ru",
+  "subs.wyzie.ru",
+  "opensubtitles.com",
+  "opensubtitles.org",
+]);
+
+/**
+ * Proxy for subtitle files.
  * Usage: GET /api/subtitle?url=<encoded-subtitle-url>
  *
  * Handles both:
  *  - wyzie VTT:  direct_download_url already points to api.flixworld.xyz/api/stream/subtitle?url=...
- *  - default SRT: direct CDN URLs (no auth needed, but we proxy for CORS)
+ *  - default SRT/VTT: direct CDN URLs (no auth needed, but we proxy for CORS)
  */
 export async function GET(req: NextRequest) {
   const rawUrl = req.nextUrl.searchParams.get("url");
@@ -16,7 +29,20 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Missing url param", { status: 400 });
   }
 
-  const targetUrl = decodeURIComponent(rawUrl);
+  let targetUrl: string;
+  try {
+    targetUrl = decodeURIComponent(rawUrl);
+    // Validate it's an https URL from an allowed origin
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "https:") {
+      return new NextResponse("Only HTTPS subtitle URLs are allowed", { status: 400 });
+    }
+    if (!ALLOWED_ORIGINS.has(parsed.hostname)) {
+      return new NextResponse(`Subtitle origin not allowed: ${parsed.hostname}`, { status: 403 });
+    }
+  } catch {
+    return new NextResponse("Invalid url param", { status: 400 });
+  }
 
   // Only send the API key for requests that go to our stream API
   const headers: Record<string, string> = {};
@@ -38,8 +64,8 @@ export async function GET(req: NextRequest) {
     return new NextResponse(text, {
       status: 200,
       headers: {
-        "Content-Type": contentType,
-        "Cache-Control": "public, max-age=3600",
+        "Content-Type":                contentType,
+        "Cache-Control":               "public, max-age=3600",
         "Access-Control-Allow-Origin": "*",
       },
     });

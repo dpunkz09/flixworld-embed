@@ -13,16 +13,15 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        // Allow embed pages to be iframed from anywhere
+        // Allow embed pages to be iframed from anywhere.
+        // X-Frame-Options is intentionally omitted — "ALLOWALL" is not a valid
+        // value per spec and is ignored by browsers. The CSP frame-ancestors
+        // directive is the correct modern mechanism.
         source: "/embed/:path*",
         headers: [
-          { key: "X-Frame-Options", value: "ALLOWALL" },
           { key: "Content-Security-Policy", value: "frame-ancestors *" },
           // Suppress the browser's Permissions-Policy violation for `unload`,
           // which JW Player's CDN scripts attempt to register internally.
-          // The `unload` event is deprecated and blocked in cross-origin iframes
-          // by default; this header silences the console warning without
-          // affecting playback or functionality.
           { key: "Permissions-Policy", value: "unload=()" },
         ],
       },

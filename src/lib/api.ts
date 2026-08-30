@@ -23,13 +23,50 @@ interface VidzeeResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Minimal TMDB response shapes (avoids `any`, catches field-name typos)
+// ---------------------------------------------------------------------------
+
+interface TmdbMovie {
+  title?: string;
+  original_title?: string;
+  tagline?: string;
+  overview?: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  release_date?: string;
+  vote_average?: number;
+  runtime?: number;
+  genres?: { name: string }[];
+}
+
+interface TmdbShow {
+  name?: string;
+  original_name?: string;
+  tagline?: string;
+  overview?: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  first_air_date?: string;
+  vote_average?: number;
+  genres?: { name: string }[];
+}
+
+interface TmdbEpisode {
+  name?: string;
+  overview?: string;
+  still_path?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Public types consumed by components
 // ---------------------------------------------------------------------------
 
 export interface StreamSource {
-  /** Direct URL to the MP4/MKV file */
+  /** Direct URL to the stream (HLS playlist or MP4/MKV file) */
   url: string;
   language: string;
+  /** Stream type — used by JW Player to pick the correct parser */
+  type?: "hls" | "mp4";
 }
 
 export interface SubtitleTrack {
@@ -42,43 +79,31 @@ export interface SubtitleTrack {
 /** Normalised TMDB metadata shared between movies and TV episodes */
 export interface MediaInfo {
   type: "movie" | "tv";
-  /** Main title — movie title or show name */
   title: string;
-  /** Tagline (movies) or show overview used as secondary line */
   tagline?: string;
-  /** Short overview / episode overview */
   overview?: string;
-  /** Episode-specific fields — only present for TV */
   episodeTitle?: string;
   season?: number;
   episode?: number;
   /** e.g. "2h 19m" or "S1 · E1" */
   meta?: string;
-  /** TMDB poster path, e.g. "/jSziioSwPVrOy9Yow3XhWIBDjq1.jpg" */
   posterPath?: string;
-  /** TMDB backdrop path */
   backdropPath?: string;
-  /** Release year */
   year?: number;
   /** 0–10 */
   rating?: number;
-  /** Comma-separated genre names */
   genres?: string;
 }
 
 export interface StreamData {
   /** TMDB id — used as stable watch-progress key */
   tmdbId: string;
-  /** IMDB id (tt…) — passed to the worker for RiveStream lookups */
   imdbId?: string;
-  /** "movie" | "tv" — used by the server preloader */
   mediaType?: "movie" | "tv";
   season?: string;
   episode?: string;
   sources: StreamSource[];
-  /** Available subtitle/caption tracks (may be empty) */
   subtitles: SubtitleTrack[];
-  /** TMDB metadata for the overlay (undefined if fetch failed) */
   mediaInfo?: MediaInfo;
 }
 
@@ -87,8 +112,8 @@ export interface StreamData {
 // ---------------------------------------------------------------------------
 
 async function vidzeeGet(url: string): Promise<VidzeeResponse> {
+  // No inner next.revalidate — the outer unstable_cache controls caching.
   const res = await fetch(url, {
-    next: { revalidate: 300 },
     headers: {
       Accept: "application/json",
       "User-Agent":
@@ -104,10 +129,14 @@ async function vidzeeGet(url: string): Promise<VidzeeResponse> {
 async function subtitleGet(url: string): Promise<SubtitleTrack[]> {
   try {
     const res = await fetch(url, {
-      next: { revalidate: 300 },
       headers: { Accept: "application/json" },
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`[subtitleGet] Non-ok response ${res.status} for ${url}`);
+      }
+      return [];
+    }
     const json: SubtitleTrack[] = await res.json();
     return Array.isArray(json) ? json : [];
   } catch {
@@ -124,17 +153,27 @@ function toStreamData(
   season?: string,
   episode?: string,
 ): StreamData {
-  const sources: StreamSource[] = json.extracted.streams.map((s) => ({
-    url: s.url,
-    language: s.language,
-  }));
+  const sources: StreamSource[] = json.extracted.streams.map((s) => {
+    const isHls =
+      s.type === "hls" ||
+      s.type === "m3u8" ||
+      s.type === "application/x-mpegurl" ||
+      s.url.includes(".m3u8");
+    return {
+      url:      s.url,
+      language: s.language,
+      type:     isHls ? "hls" : "mp4",
+    };
+  });
+
   return {
     tmdbId,
     mediaType,
     sources,
     subtitles,
     mediaInfo,
-    ...(season ? { season, episode } : {}),
+    // Only spread season+episode when both are present
+    ...(season && episode ? { season, episode } : {}),
   };
 }
 
@@ -148,7 +187,6 @@ function fmtRuntime(minutes: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function genreNames(genres: { name: string }[]): string {
   return genres?.map((g) => g.name).join(", ") ?? "";
 }
@@ -160,22 +198,24 @@ async function fetchMovieInfo(tmdbId: string): Promise<MediaInfo | undefined> {
       { next: { revalidate: 86400 } },
     );
     if (!res.ok) return undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const d: any = await res.json();
+    const d: TmdbMovie = await res.json();
     const year = d.release_date ? new Date(d.release_date).getFullYear() : undefined;
     return {
-      type: "movie",
-      title: d.title ?? d.original_title,
-      tagline: d.tagline || undefined,
-      overview: d.overview || undefined,
-      posterPath: d.poster_path ?? undefined,
-      backdropPath: d.backdrop_path ?? undefined,
+      type:        "movie",
+      title:       d.title ?? d.original_title ?? "Unknown",
+      tagline:     d.tagline     || undefined,
+      overview:    d.overview    || undefined,
+      posterPath:  d.poster_path   ?? undefined,
+      backdropPath:d.backdrop_path ?? undefined,
       year,
-      rating: d.vote_average ? Math.round(d.vote_average * 10) / 10 : undefined,
-      genres: genreNames(d.genres ?? []),
-      meta: d.runtime ? fmtRuntime(d.runtime) : undefined,
+      rating:  d.vote_average ? Math.round(d.vote_average * 10) / 10 : undefined,
+      genres:  genreNames(d.genres ?? []),
+      meta:    d.runtime ? fmtRuntime(d.runtime) : undefined,
     };
   } catch {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`[fetchMovieInfo] Failed for tmdbId=${tmdbId}`);
+    }
     return undefined;
   }
 }
@@ -196,31 +236,32 @@ async function fetchTVInfo(
       ),
     ]);
     if (!showRes.ok) return undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const show: any = await showRes.json();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ep: any = epRes.ok ? await epRes.json() : {};
-    const sNum = parseInt(season, 10);
+    const show: TmdbShow    = await showRes.json();
+    const ep: TmdbEpisode   = epRes.ok ? await epRes.json() : {};
+    const sNum = parseInt(season,  10);
     const eNum = parseInt(episode, 10);
     const year = show.first_air_date
       ? new Date(show.first_air_date).getFullYear()
       : undefined;
     return {
-      type: "tv",
-      title: show.name ?? show.original_name,
-      tagline: show.tagline || undefined,
-      overview: ep.overview || show.overview || undefined,
-      episodeTitle: ep.name || undefined,
-      season: sNum,
-      episode: eNum,
-      posterPath: show.poster_path ?? undefined,
+      type:         "tv",
+      title:        show.name ?? show.original_name ?? "Unknown",
+      tagline:      show.tagline  || undefined,
+      overview:     ep.overview   || show.overview || undefined,
+      episodeTitle: ep.name       || undefined,
+      season:       sNum,
+      episode:      eNum,
+      posterPath:   show.poster_path   ?? undefined,
       backdropPath: ep.still_path ?? show.backdrop_path ?? undefined,
       year,
-      rating: show.vote_average ? Math.round(show.vote_average * 10) / 10 : undefined,
-      genres: genreNames(show.genres ?? []),
-      meta: `S${sNum} · E${eNum}`,
+      rating:  show.vote_average ? Math.round(show.vote_average * 10) / 10 : undefined,
+      genres:  genreNames(show.genres ?? []),
+      meta:    `S${sNum} · E${eNum}`,
     };
   } catch {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`[fetchTVInfo] Failed for tmdbId=${tmdbId} S${season}E${episode}`);
+    }
     return undefined;
   }
 }
@@ -239,7 +280,7 @@ export const fetchMovieStream = unstable_cache(
     return toStreamData(tmdbId, json, subtitles, mediaInfo, "movie");
   },
   ["vidzee-movie"],
-  { revalidate: 300 },
+  { revalidate: 300, tags: ["vidzee-movie"] },
 );
 
 export const fetchTVStream = unstable_cache(

@@ -18,19 +18,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function MovieEmbed({ params }: Props) {
   const { id } = await params;
 
-  let data;
-  try {
-    data = await fetchMovieStream(id);
-  } catch {
-    notFound();
-  }
+  // notFound() returns `never` — TypeScript correctly infers data: StreamData
+  const data = await fetchMovieStream(id).catch(() => notFound());
 
-  if (!data.sources.length) {
-    notFound();
-  }
+  if (!data.sources.length) notFound();
 
   return (
-    <div style={{ width: "100vw", height: "100vh", background: "#000", overflow: "hidden" }}>
+    <div style={{ width: "100%", height: "100%", background: "#000", overflow: "hidden" }}>
       <JWPlayerClient data={data} />
     </div>
   );

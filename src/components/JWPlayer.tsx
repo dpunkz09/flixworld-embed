@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { StreamData, StreamSource, SubtitleTrack } from "@/lib/api";
 import TitleOverlay from "./TitleOverlay";
 import ServerOverlay from "./ServerOverlay";
@@ -56,12 +56,41 @@ function saveProgress(key: string | null, t: number, dur: number) {
 }
 
 // ---------------------------------------------------------------------------
+// Playlist builder (module-level pure function — not recreated per render)
+// ---------------------------------------------------------------------------
+
+function buildPlaylist(sources: StreamSource[], subtitles: SubtitleTrack[]) {
+  const jwSources = sources.map((s) => {
+    // Prefer the explicit type field carried from the API.
+    // Fall back to URL sniffing — proxy-wrapped URLs preserve ".m3u8" as a
+    // plain substring inside the encoded query param, so includes() is safe.
+    const isHls =
+      s.type === "hls" ||
+      (s.type === undefined && (s.url.includes(".m3u8") || /\/hls\d*\//i.test(s.url)));
+
+    return {
+      file:  s.url,
+      type:  isHls ? "application/x-mpegurl" : "video/mp4",
+      label: s.language,
+    };
+  });
+
+  const tracks = subtitles.map((s) => ({
+    file:  s.file,
+    label: s.label,
+    kind:  "captions",
+  }));
+
+  return [{ sources: jwSources, ...(tracks.length ? { tracks } : {}) }];
+}
+
+// ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 export interface JWPlayerProps {
   data: StreamData;
-  /** Sources from the currently active server — replaces data.sources */
+  /** Sources from the currently active server */
   activeSources: StreamSource[];
   /** Subtitles from the currently active server */
   activeSubtitles: SubtitleTrack[];
@@ -85,7 +114,10 @@ export default function JWPlayer({
   activeServerId,
   onServerSelect,
 }: JWPlayerProps) {
-  const containerId  = "jw-player-container";
+  // useId produces a stable, unique id — safe if two instances ever coexist
+  const uid          = useId();
+  const containerId  = `jw-player-${uid.replace(/:/g, "")}`;
+
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const playerRef    = useRef<any>(null);
@@ -95,26 +127,6 @@ export default function JWPlayer({
   const [playerReady, setPlayerReady]   = useState(false);
 
   const pKey = progressKey(data);
-
-  // ── Build JW playlist from the active sources ──────────────────────────
-  function buildPlaylist(sources: StreamSource[], subtitles: SubtitleTrack[]) {
-    const jwSources = sources.map((s) => ({
-      file: s.url,
-      // JW Player respects type for HLS vs MP4 selection
-      type: s.language === "hls" || s.url.includes(".m3u8")
-        ? "application/x-mpegurl"
-        : "video/mp4",
-      label: s.language,
-    }));
-
-    const tracks = subtitles.map((s) => ({
-      file: s.file,
-      label: s.label,
-      kind: "captions",
-    }));
-
-    return [{ sources: jwSources, ...(tracks.length ? { tracks } : {}) }];
-  }
 
   // ── Initial setup ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -129,10 +141,10 @@ export default function JWPlayer({
       playerRef.current = player;
 
       player.setup({
-        key:      JW_LICENSE_KEY,
-        playlist: buildPlaylist(activeSources, activeSubtitles),
-        width:    "100%",
-        height:   "100%",
+        key:        JW_LICENSE_KEY,
+        playlist:   buildPlaylist(activeSources, activeSubtitles),
+        width:      "100%",
+        height:     "100%",
         stretching: "uniform",
         autostart:  true,
         mute:       false,
@@ -174,10 +186,24 @@ export default function JWPlayer({
 
     const loadAndSetup = () => {
       if (typeof window === "undefined") return;
-      if (typeof window.jwplayer === "function") { setupPlayer(); return; }
+
+      // Script already loaded — set up immediately
+      if (typeof window.jwplayer === "function") {
+        setupPlayer();
+        return;
+      }
 
       const existing = document.getElementById("jwplayer-script");
-      if (existing) { existing.addEventListener("load", setupPlayer, { once: true }); return; }
+      if (existing) {
+        // Script tag exists but may have already fired its load event.
+        // Re-check jwplayer availability first to avoid a missed event.
+        if (typeof window.jwplayer === "function") {
+          setupPlayer();
+        } else {
+          existing.addEventListener("load", setupPlayer, { once: true });
+        }
+        return;
+      }
 
       const script = document.createElement("script");
       script.id    = "jwplayer-script";
@@ -200,53 +226,50 @@ export default function JWPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Source switch — fired when the user picks a different server ───────
-  // We capture the current playback position, load the new sources, then
-  // seek back so the switch feels seamless.
+  // ── Source/subtitle switch — fired when the user picks a different server
+  // Captures the current playback position, loads the new sources, then
+  // seeks back so the switch feels seamless.
   const prevServerIdRef = useRef(activeServerId);
   useEffect(() => {
-    // Skip on first render (initial sources are set via setup above)
+    // Skip the initial render — sources are set via setup above
     if (prevServerIdRef.current === activeServerId) return;
     prevServerIdRef.current = activeServerId;
 
     const player = playerRef.current;
     if (!player || !playerReady) return;
 
-    // Capture position before reload
     let resumeAt = 0;
     try { resumeAt = player.getPosition() ?? 0; } catch { /* ignore */ }
 
-    const playlist = buildPlaylist(activeSources, activeSubtitles);
+    player.load(buildPlaylist(activeSources, activeSubtitles));
 
-    player.load(playlist);
-
-    // Seek to saved position once the new playlist is buffered
     if (resumeAt > 5) {
       player.once("firstFrame", () => {
         try { player.seek(resumeAt); } catch { /* ignore */ }
       });
     }
+    // activeSubtitles included so a subtitle-only change on the same server
+    // also triggers a reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeServerId, activeSources]);
+  }, [activeServerId, activeSources, activeSubtitles]);
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div style={{ width: "100%", height: "100%", background: "#000" }}>
+      {/* role + aria-label make the player region reachable as a landmark
+          before JW Player injects its own ARIA structure */}
       <div
         id={containerId}
         ref={containerRef}
+        role="region"
+        aria-label="Video player"
         style={{ width: "100%", height: "100%" }}
       />
 
-      {/* TitleOverlay — top-right metadata card */}
       {overlayMount && data.mediaInfo && (
-        <TitleOverlay
-          info={data.mediaInfo}
-          mountEl={overlayMount}
-        />
+        <TitleOverlay info={data.mediaInfo} mountEl={overlayMount} />
       )}
 
-      {/* ServerOverlay — bottom-left cloud button + server panel */}
       {overlayMount && (
         <ServerOverlay
           servers={servers}

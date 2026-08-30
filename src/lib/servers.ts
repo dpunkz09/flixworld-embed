@@ -5,7 +5,7 @@
  * They share the same response shape as the existing Vidzee endpoint so no
  * new types are needed on the api.ts side.
  *
- * The first server (gama / Vidzee) reuses the sources already fetched
+ * The first server (alfa / Videasy) reuses the sources already fetched
  * server-side and passed in via StreamData — instant, no extra request.
  * Every other server is fetched client-side during preload and resolves
  * independently so the UI updates incrementally.
@@ -206,8 +206,8 @@ function toServerResult(
 // ---------------------------------------------------------------------------
 
 const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string }> = [
-  { id: "gama",    label: "Gama",    tag: "HD",    key: "vidzee"             },
   { id: "alfa",    label: "Alfa",    tag: "HD",    key: "videasy"            },
+  { id: "gama",    label: "Gama",    tag: "HD",    key: "vidzee"             },
   { id: "catflix", label: "Catflix", tag: "HD",    key: "buzz"               },
   { id: "lamda",   label: "Lamda",   tag: "MULTI", key: "allmovies"          },
   { id: "hexa",    label: "Hexa",    tag: "HD",    key: "vidlink"            },
@@ -220,7 +220,7 @@ const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string }
 
 /**
  * Build a ServerDef for a given entry.
- * The first entry (gama/vidzee) reuses data.sources — instant, no request.
+ * The first entry (alfa/videasy) reuses data.sources — instant, no request.
  * All others call the jpaworx API.
  */
 function makeDef(

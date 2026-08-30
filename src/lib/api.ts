@@ -1,24 +1,26 @@
 import { unstable_cache } from "next/cache";
 
-const VIDZEE_BASE   = "https://mp4-server.jpaworx.com/stream/vidzee";
+const VIDEASY_BASE  = "https://mp4-server.jpaworx.com/stream/videasy";
 const SUBTITLE_BASE = "https://cache.vdrk.site/v2";
 const TMDB_BASE     = "https://api.themoviedb.org/3";
 const TMDB_KEY      = process.env.TMDB_API_KEY ?? "";
 
 // ---------------------------------------------------------------------------
-// Raw API response shapes — Vidzee
+// Raw API response shapes — Videasy (default server)
 // ---------------------------------------------------------------------------
 
-interface VidzeeStream {
+interface VideasyStream {
   url: string;
   type: string;
   language: string;
 }
 
-interface VidzeeResponse {
+interface VideasyResponse {
   ok: boolean;
   extracted: {
-    streams: VidzeeStream[];
+    url?: string;
+    type?: string;
+    streams?: VideasyStream[];
   };
 }
 
@@ -108,10 +110,10 @@ export interface StreamData {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch helpers — Vidzee
+// Fetch helpers — Videasy
 // ---------------------------------------------------------------------------
 
-async function vidzeeGet(url: string): Promise<VidzeeResponse> {
+async function videasyGet(url: string): Promise<VideasyResponse> {
   // No inner next.revalidate — the outer unstable_cache controls caching.
   const res = await fetch(url, {
     headers: {
@@ -120,9 +122,9 @@ async function vidzeeGet(url: string): Promise<VidzeeResponse> {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
     },
   });
-  if (!res.ok) throw new Error(`Vidzee API error ${res.status}: ${url}`);
-  const json: VidzeeResponse = await res.json();
-  if (!json.ok) throw new Error(`Vidzee returned ok=false for: ${url}`);
+  if (!res.ok) throw new Error(`Videasy API error ${res.status}: ${url}`);
+  const json: VideasyResponse = await res.json();
+  if (!json.ok) throw new Error(`Videasy returned ok=false for: ${url}`);
   return json;
 }
 
@@ -146,25 +148,36 @@ async function subtitleGet(url: string): Promise<SubtitleTrack[]> {
 
 function toStreamData(
   tmdbId: string,
-  json: VidzeeResponse,
+  json: VideasyResponse,
   subtitles: SubtitleTrack[],
   mediaInfo: MediaInfo | undefined,
   mediaType: "movie" | "tv",
   season?: string,
   episode?: string,
 ): StreamData {
-  const sources: StreamSource[] = json.extracted.streams.map((s) => {
+  const ext = json.extracted;
+
+  // Videasy may return streams[] or a flat { url, type } object.
+  // Normalise both into StreamSource[].
+  let sources: StreamSource[] = [];
+
+  if (ext.streams?.length) {
+    sources = ext.streams.map((s) => {
+      const isHls =
+        s.type === "hls" ||
+        s.type === "m3u8" ||
+        s.type === "application/x-mpegurl" ||
+        s.url.includes(".m3u8") ||
+        /\/hls\d*\//i.test(s.url);
+      return { url: s.url, language: s.language, type: isHls ? "hls" : "mp4" };
+    });
+  } else if (ext.url) {
     const isHls =
-      s.type === "hls" ||
-      s.type === "m3u8" ||
-      s.type === "application/x-mpegurl" ||
-      s.url.includes(".m3u8");
-    return {
-      url:      s.url,
-      language: s.language,
-      type:     isHls ? "hls" : "mp4",
-    };
-  });
+      ext.type === "hls" ||
+      ext.url.includes(".m3u8") ||
+      /\/hls\d*\//i.test(ext.url);
+    sources = [{ url: ext.url, language: "Auto", type: isHls ? "hls" : "mp4" }];
+  }
 
   return {
     tmdbId,
@@ -273,25 +286,25 @@ async function fetchTVInfo(
 export const fetchMovieStream = unstable_cache(
   async (tmdbId: string): Promise<StreamData> => {
     const [json, subtitles, mediaInfo] = await Promise.all([
-      vidzeeGet(`${VIDZEE_BASE}/movie/${tmdbId}`),
+      videasyGet(`${VIDEASY_BASE}/movie/${tmdbId}`),
       subtitleGet(`${SUBTITLE_BASE}/movie/${tmdbId}/`),
       fetchMovieInfo(tmdbId),
     ]);
     return toStreamData(tmdbId, json, subtitles, mediaInfo, "movie");
   },
-  ["vidzee-movie"],
-  { revalidate: 300, tags: ["vidzee-movie"] },
+  ["videasy-movie"],
+  { revalidate: 300, tags: ["videasy-movie"] },
 );
 
 export const fetchTVStream = unstable_cache(
   async (tmdbId: string, season: string, episode: string): Promise<StreamData> => {
     const [json, subtitles, mediaInfo] = await Promise.all([
-      vidzeeGet(`${VIDZEE_BASE}/tv/${tmdbId}/${season}/${episode}`),
+      videasyGet(`${VIDEASY_BASE}/tv/${tmdbId}/${season}/${episode}`),
       subtitleGet(`${SUBTITLE_BASE}/tv/${tmdbId}/${season}/${episode}`),
       fetchTVInfo(tmdbId, season, episode),
     ]);
     return toStreamData(tmdbId, json, subtitles, mediaInfo, "tv", season, episode);
   },
-  ["vidzee-tv"],
-  { revalidate: 300, tags: ["vidzee-tv"] },
+  ["videasy-tv"],
+  { revalidate: 300, tags: ["videasy-tv"] },
 );

@@ -1,6 +1,6 @@
 import { unstable_cache } from "next/cache";
 
-const VIDEASY_BASE  = "https://mp4-server.jpaworx.com/stream/videasy";
+const VIDEASY_BASE  = `${process.env.FW_API_BASE ?? ""}/stream/videasy`;
 const SUBTITLE_BASE = "https://cache.vdrk.site/v2";
 const TMDB_BASE     = "https://api.themoviedb.org/3";
 const TMDB_KEY      = process.env.TMDB_API_KEY ?? "";

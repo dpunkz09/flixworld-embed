@@ -1,9 +1,10 @@
 /**
  * Server registry + preload logic for the server-switching overlay.
  *
- * All servers call https://mp4-server.jpaworx.com/stream/{key}/{movie|tv}/...
- * They share the same response shape as the existing Vidzee endpoint so no
- * new types are needed on the api.ts side.
+ * All servers call the fw-api at FW_API_BASE (localhost:4444 in production,
+ * falling back to https://mp4-server.jpaworx.com). The /api/stream proxy
+ * route handles all client-side requests server-side, so the API is never
+ * called directly from the browser.
  *
  * The first server (alfa / Videasy) reuses the sources already fetched
  * server-side and passed in via StreamData — instant, no extra request.
@@ -91,9 +92,10 @@ interface JpaResponse {
   extracted?: JpaExtracted;
 }
 
-// ---------------------------------------------------------------------------
-// Shared fetch helper
-// ---------------------------------------------------------------------------
+// Token injected at build time from NEXT_PUBLIC_INTERNAL_API_TOKEN.
+// Sent as a header on every /api/stream request so the route can reject
+// requests that don't originate from this app.
+const INTERNAL_TOKEN = process.env.NEXT_PUBLIC_INTERNAL_API_TOKEN ?? "";
 
 function buildUrl(key: string, data: StreamData): string {
   const isTV = data.mediaType === "tv" || !!data.season;
@@ -118,7 +120,10 @@ async function fetchJpa(
       ? AbortSignal.any([signal, timeout])
       : timeout;
 
-    const res = await fetch(url, { signal: combined });
+    const res = await fetch(url, {
+      signal: combined,
+      headers: { "x-internal-token": INTERNAL_TOKEN },
+    });
     if (!res.ok) return null;
     const json = (await res.json()) as JpaResponse;
     if (!json.ok || !json.extracted) return null;

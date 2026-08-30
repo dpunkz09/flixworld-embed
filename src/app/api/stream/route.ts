@@ -1,19 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
 /**
- * Server-side proxy for mp4-server.jpaworx.com stream endpoints.
- * Called client-side from servers.ts to work around the missing CORS headers
- * on the upstream API.
+ * Server-side proxy for fw-api stream endpoints.
+ * Called client-side from servers.ts — requests must include the
+ * X-Internal-Token header to prove they originate from this app.
  *
  * Usage:
  *   GET /api/stream?key=allmovies&type=movie&tmdbId=27205
  *   GET /api/stream?key=allmovies&type=tv&tmdbId=94997&season=1&episode=1
  */
 
-const JPA_BASE = "https://mp4-server.jpaworx.com";
+const JPA_BASE      = process.env.FW_API_BASE ?? "https://mp4-server.jpaworx.com";
+const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN ?? "";
 
-/** Keys that are allowed to be proxied — prevents this route being used as
- *  an open proxy for arbitrary upstream URLs. */
+/** Keys that are allowed to be proxied — prevents open-proxy abuse. */
 const ALLOWED_KEYS = new Set([
   "buzz",
   "allmovies",
@@ -28,9 +28,17 @@ const ALLOWED_KEYS = new Set([
 ]);
 
 export async function GET(req: NextRequest) {
+  // ── Token guard ─────────────────────────────────────────────
+  // Reject any request that doesn't carry the shared internal secret.
+  // This prevents the endpoint from being used as a public proxy.
+  const token = req.headers.get("x-internal-token");
+  if (!INTERNAL_TOKEN || token !== INTERNAL_TOKEN) {
+    return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+  }
+
   const p       = req.nextUrl.searchParams;
   const key     = p.get("key");
-  const type    = p.get("type");   // "movie" | "tv"
+  const type    = p.get("type");
   const tmdbId  = p.get("tmdbId");
   const season  = p.get("season");
   const episode = p.get("episode");
@@ -59,12 +67,10 @@ export async function GET(req: NextRequest) {
   try {
     const res = await fetch(upstream, {
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         Accept: "application/json",
       },
-      // Do NOT add next.revalidate here — fw-api already handles caching in
-      // Redis with a short TTL tuned to upstream token lifetimes.
+      // fw-api handles caching in Redis — don't double-cache here.
       cache: "no-store",
     });
 
@@ -79,10 +85,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(data, {
       status: 200,
-      headers: {
-        // Tell the browser not to cache either — tokens expire quickly.
-        "Cache-Control": "no-store",
-      },
+      headers: { "Cache-Control": "no-store" },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Upstream fetch failed";

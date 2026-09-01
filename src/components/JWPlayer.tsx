@@ -33,10 +33,13 @@ function loadProgress(key: string): number {
  * Persists current position.
  * Skips the last 30 s so a near-finished title doesn't resume mid-credits,
  * and removes the entry instead so it's treated as fully watched.
+ * Pass duration as -1 when unknown (e.g. HLS before manifest is parsed) to
+ * skip the near-end guard and always save.
  */
 function saveProgress(key: string, position: number, duration: number) {
-  if (!duration || position < 5) return;
-  if (duration - position < 30) {
+  if (position < 5) return;
+  // When duration is known and we're within 30 s of the end, clear the entry
+  if (duration > 0 && duration - position < 30) {
     try { localStorage.removeItem(key); } catch { /* quota */ }
     return;
   }
@@ -154,14 +157,17 @@ export default function JWPlayer({
         autostart:  true,
         mute:       false,
         primary:    "html5",
-        ...(savedTime > 0 ? { starttime: savedTime } : {}),
       });
 
       player.on("time", ({ position, duration }: { position: number; duration: number }) => {
         const now = Date.now();
         if (now - saveTimerRef.current > 5000) {
           saveTimerRef.current = now;
-          saveProgress(pKey, position, duration);
+          // duration can be 0 on some HLS streams until the manifest is fully
+          // parsed — fall back to a sentinel so we still save position, and
+          // skip the "near end" guard when duration is unknown.
+          const dur = duration > 0 ? duration : -1;
+          saveProgress(pKey, position, dur);
         }
       });
 
@@ -178,6 +184,14 @@ export default function JWPlayer({
         const wrapper = player.getContainer() as Element | null;
         if (wrapper) setOverlayMount(wrapper);
         setPlayerReady(true);
+        // Seek to saved position once the first frame is rendered.
+        // seek() called at "ready" can be ignored on HLS before buffering
+        // starts — "firstFrame" is the earliest reliable seek point.
+        if (savedTime > 0) {
+          player.once("firstFrame", () => {
+            try { player.seek(savedTime); } catch { /* ignore */ }
+          });
+        }
       });
 
       player.on("fullscreen", ({ fullscreen }: { fullscreen: boolean }) => {

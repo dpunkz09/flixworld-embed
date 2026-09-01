@@ -58,7 +58,12 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const text = await upstream.text();
+    const rawText = await upstream.text();
+    // SRT/ASS/SSA files use \N (or \n) as an in-cue line-break escape.
+    // WebVTT uses a literal newline instead, so replace all \N occurrences
+    // (case-insensitive to catch both \N and \n escape variants) with a real
+    // newline before handing the text to the browser/player.
+    const text = rawText.replace(/\\N/gi, "\n");
     const contentType = upstream.headers.get("content-type") ?? "text/plain";
 
     return new NextResponse(text, {

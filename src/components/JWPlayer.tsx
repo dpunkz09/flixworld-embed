@@ -6,6 +6,45 @@ import TitleOverlay from "./TitleOverlay";
 import ServerOverlay from "./ServerOverlay";
 import type { ServerState } from "@/lib/servers";
 
+// ---------------------------------------------------------------------------
+// Watch-progress helpers (localStorage)
+// ---------------------------------------------------------------------------
+
+/** Stable key per piece of content. */
+function progressKey(data: StreamData): string {
+  return data.season
+    ? `wp:${data.tmdbId}:${data.season}:${data.episode}`
+    : `wp:${data.tmdbId}`;
+}
+
+/** Returns saved position in seconds, or 0 if nothing stored. */
+function loadProgress(key: string): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return 0;
+    const { t } = JSON.parse(raw) as { t: number };
+    return typeof t === "number" && t > 5 ? t : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Persists current position.
+ * Skips the last 30 s so a near-finished title doesn't resume mid-credits,
+ * and removes the entry instead so it's treated as fully watched.
+ */
+function saveProgress(key: string, position: number, duration: number) {
+  if (!duration || position < 5) return;
+  if (duration - position < 30) {
+    try { localStorage.removeItem(key); } catch { /* quota */ }
+    return;
+  }
+  try {
+    localStorage.setItem(key, JSON.stringify({ t: Math.floor(position) }));
+  } catch { /* quota */ }
+}
+
 // JW Player loaded from CDN — no npm package
 declare global {
   interface Window {
@@ -20,40 +59,6 @@ declare global {
 
 const JW_LICENSE_KEY = process.env.NEXT_PUBLIC_JW_LICENSE_KEY ?? "";
 const JW_SCRIPT_URL  = "//ssl.p.jwpcdn.com/player/v/8.22.0/jwplayer.js";
-
-// ---------------------------------------------------------------------------
-// Watch-progress helpers (localStorage)
-// ---------------------------------------------------------------------------
-
-function progressKey(data: StreamData): string | null {
-  if (!data.tmdbId) return null;
-  return data.season
-    ? `wp:${data.tmdbId}:${data.season}:${data.episode}`
-    : `wp:${data.tmdbId}`;
-}
-
-function loadSavedProgress(key: string | null): number {
-  if (!key) return 0;
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return 0;
-    const { t } = JSON.parse(raw) as { t: number };
-    return typeof t === "number" && t > 5 ? t : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function saveProgress(key: string | null, t: number, dur: number) {
-  if (!key || !dur || t < 5) return;
-  if (dur - t < 30) {
-    try { localStorage.removeItem(key); } catch { /* quota */ }
-    return;
-  }
-  try {
-    localStorage.setItem(key, JSON.stringify({ t: Math.floor(t) }));
-  } catch { /* quota */ }
-}
 
 // ---------------------------------------------------------------------------
 // Playlist builder (module-level pure function — not recreated per render)
@@ -132,7 +137,7 @@ export default function JWPlayer({
   useEffect(() => {
     let isMounted = true;
 
-    const savedTime = loadSavedProgress(pKey);
+    const savedTime = loadProgress(pKey);
 
     const setupPlayer = () => {
       if (!isMounted || !containerRef.current) return;
@@ -161,9 +166,11 @@ export default function JWPlayer({
       });
 
       player.on("complete", () => {
-        if (pKey) {
-          try { localStorage.removeItem(pKey); } catch { /* ignore */ }
-        }
+        // saveProgress clears the entry when near the end; call it with
+        // duration == position so the "last 30 s" branch always fires.
+        try {
+          localStorage.removeItem(pKey);
+        } catch { /* quota */ }
       });
 
       player.on("ready", () => {

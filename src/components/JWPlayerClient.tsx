@@ -97,6 +97,13 @@ const JWPlayer = dynamic(() => import("./JWPlayer"), {
   ),
 });
 
+// Route subtitle files through the local proxy so that raw \N escape
+// sequences (SRT line-break convention) are normalised to real newlines
+// before JW Player receives the cue text.
+function proxySubtitleUrl(url: string): string {
+  return `/api/subtitle?url=${encodeURIComponent(url)}`;
+}
+
 interface Props {
   data: StreamData;
 }
@@ -118,7 +125,9 @@ export default function JWPlayerClient({ data }: Props) {
 
   // ── Active sources/subtitles fed to JWPlayer ───────────────────────────
   const [activeSources,   setActiveSources]   = useState<StreamSource[]>(data.sources);
-  const [activeSubtitles, setActiveSubtitles] = useState<SubtitleTrack[]>(data.subtitles);
+  const [activeSubtitles, setActiveSubtitles] = useState<SubtitleTrack[]>(
+    data.subtitles.map((s) => ({ ...s, file: proxySubtitleUrl(s.file) })),
+  );
 
   // Synchronous ref — always reflects the latest servers state without
   // the one-render lag a useEffect sync would introduce.
@@ -140,7 +149,7 @@ export default function JWPlayerClient({ data }: Props) {
     setActiveSources([best]);
     setActiveSubtitles(
       state.result.subtitles.map((s) => ({
-        file:  s.url,
+        file:  proxySubtitleUrl(s.url),
         label: s.label,
       })),
     );

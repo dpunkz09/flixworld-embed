@@ -232,10 +232,7 @@ export default function JWPlayerClient({ data }: Props) {
           <line x1="12" y1="16" x2="12.01" y2="16" />
         </svg>
         <p style={{ color: "#f0f0f5", fontSize: "14px", fontWeight: 600, margin: 0 }}>
-          Playback Blocked
-        </p>
-        <p style={{ color: "#9898a8", fontSize: "12px", margin: 0, maxWidth: "320px", lineHeight: 1.5 }}>
-          Please remove the <code>sandbox</code> attribute from the iframe, or add the required <code>allow-*</code> tokens.
+          Please disable Sandbox
         </p>
       </div>
     );

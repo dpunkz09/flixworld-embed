@@ -9,6 +9,7 @@ import {
   SERVER_DEFS,
   type ServerState,
 } from "@/lib/servers";
+import { checkSandbox } from "@/lib/sandboxCheck";
 
 // ---------------------------------------------------------------------------
 // Adsterra popunder
@@ -109,6 +110,16 @@ interface Props {
 }
 
 export default function JWPlayerClient({ data }: Props) {
+  // ── Sandbox check ──────────────────────────────────────────────────────
+  // Run once on mount. If the iframe is sandboxed without the required
+  // allow-* tokens, block the player entirely and show an error instead.
+  const [sandboxError, setSandboxError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const result = checkSandbox();
+    if (!result.ok) setSandboxError(result.reason);
+  }, []);
+
   // ── Server states ──────────────────────────────────────────────────────
   const [servers, setServers] = useState<ServerState[]>(() =>
     SERVER_DEFS.map((def) => ({
@@ -200,6 +211,36 @@ export default function JWPlayerClient({ data }: Props) {
     autoFallenBackRef.current = true;
     applyServer(state);
   }, [applyServer]);
+
+  if (sandboxError) {
+    return (
+      <div style={{
+        width:          "100%",
+        height:         "100%",
+        background:     "#0a0a0f",
+        display:        "flex",
+        flexDirection:  "column",
+        alignItems:     "center",
+        justifyContent: "center",
+        gap:            "12px",
+        padding:        "24px",
+        fontFamily:     "system-ui, sans-serif",
+        textAlign:      "center",
+      }}>
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e50914" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="8" x2="12" y2="12" />
+          <line x1="12" y1="16" x2="12.01" y2="16" />
+        </svg>
+        <p style={{ color: "#f0f0f5", fontSize: "14px", fontWeight: 600, margin: 0 }}>
+          Playback Blocked
+        </p>
+        <p style={{ color: "#9898a8", fontSize: "12px", margin: 0, maxWidth: "320px", lineHeight: 1.5 }}>
+          {sandboxError}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <JWPlayer

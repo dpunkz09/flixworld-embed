@@ -20,9 +20,14 @@ const nextConfig: NextConfig = {
         source: "/embed/:path*",
         headers: [
           { key: "Content-Security-Policy", value: "frame-ancestors *" },
-          // Suppress the browser's Permissions-Policy violation for `unload`,
-          // which JW Player's CDN scripts attempt to register internally.
-          { key: "Permissions-Policy", value: "unload=()" },
+          {
+            key: "Permissions-Policy",
+            // unload   — suppress JW Player CDN violation noise
+            // fullscreen — must be explicitly delegated for iframes to enter
+            //              fullscreen; listing it here documents intent even
+            //              though the parent iframe's allow= attr controls it.
+            value: "unload=(), fullscreen=*",
+          },
         ],
       },
     ];

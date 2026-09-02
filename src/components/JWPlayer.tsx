@@ -142,6 +142,10 @@ export default function JWPlayer({
 
     const savedTime = loadProgress(pKey);
 
+    // Hoisted so the useEffect cleanup can remove the listener even if
+    // setupPlayer was called asynchronously (after the script loaded).
+    let handleFullscreenChange: (() => void) | null = null;
+
     const setupPlayer = () => {
       if (!isMounted || !containerRef.current) return;
 
@@ -194,15 +198,37 @@ export default function JWPlayer({
         }
       });
 
-      player.on("fullscreen", ({ fullscreen }: { fullscreen: boolean }) => {
+      // ── Orientation lock on fullscreen ──────────────────────────────
+      // screen.orientation.lock() requires the *calling* document to be the
+      // one that owns the fullscreen element. When the player runs inside an
+      // <iframe>, JW's "fullscreen" event fires in the iframe context but the
+      // fullscreen element lives in the parent document — so the lock is
+      // silently rejected. Listening to the native fullscreenchange event on
+      // the document that actually contains the fullscreen element is reliable
+      // in both standalone and embedded scenarios.
+      handleFullscreenChange = () => {
         const orientation = screen?.orientation;
         if (!orientation?.lock) return;
-        if (fullscreen) {
-          orientation.lock("landscape").catch(() => {});
+
+        const isFullscreen = !!(
+          document.fullscreenElement ??
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (document as any).webkitFullscreenElement
+        );
+
+        if (isFullscreen) {
+          // Only lock on mobile — desktop ignores the request anyway, but
+          // skipping it avoids a console rejection on desktop browsers.
+          if (window.screen.width < window.screen.height || window.innerWidth <= 1024) {
+            orientation.lock("landscape").catch(() => {});
+          }
         } else {
           orientation.unlock();
         }
-      });
+      };
+
+      document.addEventListener("fullscreenchange", handleFullscreenChange);
+      document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
     };
 
     const loadAndSetup = () => {
@@ -241,6 +267,10 @@ export default function JWPlayer({
 
     return () => {
       isMounted = false;
+      if (handleFullscreenChange) {
+        document.removeEventListener("fullscreenchange", handleFullscreenChange);
+        document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+      }
       try { playerRef.current?.remove(); } catch { /* ignore */ }
       playerRef.current = null;
     };

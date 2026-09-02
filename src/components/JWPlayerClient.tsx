@@ -9,7 +9,7 @@ import {
   SERVER_DEFS,
   type ServerState,
 } from "@/lib/servers";
-import { checkSandbox } from "@/lib/sandboxCheck";
+import { detectSandbox } from "@/lib/sandboxCheck";
 
 // ---------------------------------------------------------------------------
 // Adsterra popunder
@@ -111,13 +111,12 @@ interface Props {
 
 export default function JWPlayerClient({ data }: Props) {
   // ── Sandbox check ──────────────────────────────────────────────────────
-  // Run once on mount. If the iframe is sandboxed without the required
-  // allow-* tokens, block the player entirely and show an error instead.
-  const [sandboxError, setSandboxError] = useState<string | null>(null);
+  // Three independent probes — see src/lib/sandboxCheck.ts for details.
+  // State is a simple boolean; we don't need the reason string.
+  const [sandboxBlocked, setSandboxBlocked] = useState(false);
 
   useEffect(() => {
-    const result = checkSandbox();
-    if (!result.ok) setSandboxError(result.reason);
+    detectSandbox(() => setSandboxBlocked(true));
   }, []);
 
   // ── Server states ──────────────────────────────────────────────────────
@@ -212,7 +211,7 @@ export default function JWPlayerClient({ data }: Props) {
     applyServer(state);
   }, [applyServer]);
 
-  if (sandboxError) {
+  if (sandboxBlocked) {
     return (
       <div style={{
         width:          "100%",
@@ -236,7 +235,7 @@ export default function JWPlayerClient({ data }: Props) {
           Playback Blocked
         </p>
         <p style={{ color: "#9898a8", fontSize: "12px", margin: 0, maxWidth: "320px", lineHeight: 1.5 }}>
-          {sandboxError}
+          Please remove the <code>sandbox</code> attribute from the iframe, or add the required <code>allow-*</code> tokens.
         </p>
       </div>
     );

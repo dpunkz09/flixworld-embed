@@ -211,6 +211,7 @@ function toServerResult(
 // ---------------------------------------------------------------------------
 
 const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string }> = [
+  { id: "zeta",    label: "Zeta",    tag: "HD",    key: "nextgencloudfabric" },
   { id: "alfa",    label: "Alfa",    tag: "HD",    key: "videasy"            },
   { id: "gama",    label: "Gama",    tag: "HD",    key: "vidzee"             },
   { id: "catflix", label: "Catflix", tag: "HD",    key: "buzz"               },
@@ -220,7 +221,6 @@ const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string }
   { id: "beta",    label: "Beta",    tag: "HD",    key: "vidxyz"             },
   { id: "sigma",   label: "Sigma",   tag: "HD",    key: "hollymoviehd"       },
   { id: "filxer",  label: "Filxer",  tag: "HD",    key: "rogflix"            },
-  { id: "zeta",    label: "Zeta",    tag: "HD",    key: "nextgencloudfabric" },
 ];
 
 /**

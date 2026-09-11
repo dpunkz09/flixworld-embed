@@ -152,6 +152,10 @@ export default function JWPlayerClient({ data }: Props) {
   const activeServerIdRef = useRef(activeServerId);
   activeServerIdRef.current = activeServerId;
 
+  // Track which server ids have already been tried so auto-advance never
+  // cycles back to a server that already failed.
+  const triedServersRef = useRef<Set<string>>(new Set([SERVER_DEFS[0].id]));
+
   // ── Shared select logic (used by auto-fallback + manual selection) ─────
   const applyServer = useCallback((state: ServerState) => {
     if (!state.result) return;
@@ -164,6 +168,7 @@ export default function JWPlayerClient({ data }: Props) {
       })),
     );
     setActiveServerId(state.id);
+    triedServersRef.current.add(state.id);
   }, []);
 
   // ── Preload all servers in parallel on mount ───────────────────────────
@@ -188,11 +193,13 @@ export default function JWPlayerClient({ data }: Props) {
 
       if (!defaultHasNoSources) return;
 
-      // Find the next server in list order that is already ready with sources
+      // Find the next untried server in list order that is ready with sources
       const fallback = updated.find(
-        (s) => s.id !== currentId && s.status === "ready" && (s.result?.sources.length ?? 0) > 0,
+        (s) =>
+          !triedServersRef.current.has(s.id) &&
+          s.status === "ready" &&
+          (s.result?.sources.length ?? 0) > 0,
       );
-
       if (fallback) {
         autoFallenBackRef.current = true;
         applyServer(fallback);
@@ -209,6 +216,33 @@ export default function JWPlayerClient({ data }: Props) {
     // Manual pick disables further auto-fallback
     autoFallenBackRef.current = true;
     applyServer(state);
+  }, [applyServer]);
+
+  // ── Auto-advance on playback failure ──────────────────────────────────
+  // Called by JWPlayer when the current server stalls or errors.
+  // Picks the next ready server that hasn't been tried yet, in list order.
+  // Stops trying once all servers have been exhausted.
+  const handlePlaybackFailed = useCallback(() => {
+    const current = activeServerIdRef.current;
+    const tried   = triedServersRef.current;
+
+    // Mark current as tried in case it wasn't already
+    tried.add(current);
+
+    const next = serversRef.current.find(
+      (s) =>
+        !tried.has(s.id) &&
+        s.status === "ready" &&
+        (s.result?.sources.length ?? 0) > 0,
+    );
+
+    if (next) {
+      // Allow auto-fallback for auto-advances even if the user has manually
+      // picked before — we're recovering from failure, not overriding intent.
+      applyServer(next);
+    }
+    // If no untried ready server exists, wait — more servers may still be
+    // loading. The preload onUpdate will trigger auto-fallback when they land.
   }, [applyServer]);
 
   if (sandboxBlocked) {
@@ -246,6 +280,7 @@ export default function JWPlayerClient({ data }: Props) {
       servers={servers}
       activeServerId={activeServerId}
       onServerSelect={handleServerSelect}
+      onPlaybackFailed={handlePlaybackFailed}
     />
   );
 }

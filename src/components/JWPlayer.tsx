@@ -108,6 +108,11 @@ export interface JWPlayerProps {
   activeServerId: string;
   /** Called when the user picks a different server in the overlay */
   onServerSelect: (id: string) => void;
+  /**
+   * Called when playback fails to start or stalls unrecoverably.
+   * JWPlayerClient uses this to auto-advance to the next ready server.
+   */
+  onPlaybackFailed?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +126,7 @@ export default function JWPlayer({
   servers,
   activeServerId,
   onServerSelect,
+  onPlaybackFailed,
 }: JWPlayerProps) {
   // useId produces a stable, unique id — safe if two instances ever coexist
   const uid          = useId();
@@ -129,7 +135,11 @@ export default function JWPlayer({
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const playerRef    = useRef<any>(null);
-  const saveTimerRef = useRef<number>(0);
+  const saveTimerRef  = useRef<number>(0);
+  // Ref so the stall-timeout can be cleared from inside JW event handlers
+  // without capturing a stale closure over onPlaybackFailed.
+  const onFailedRef   = useRef(onPlaybackFailed);
+  useEffect(() => { onFailedRef.current = onPlaybackFailed; });
 
   const [overlayMount, setOverlayMount] = useState<Element | null>(null);
   const [playerReady, setPlayerReady]   = useState(false);
@@ -196,6 +206,45 @@ export default function JWPlayer({
             try { player.seek(savedTime); } catch { /* ignore */ }
           });
         }
+      });
+
+      // ── Playback failure detection ─────────────────────────────────
+      // Three triggers, any of which means this server can't play:
+      //   1. JW "error" — stream fetch failed, codec unsupported, etc.
+      //   2. JW "setupError" — player couldn't initialise at all.
+      //   3. No-start timeout — ready fired but firstFrame hasn't arrived
+      //      within NO_START_TIMEOUT_MS. Catches silent HLS stalls.
+
+      const NO_START_TIMEOUT_MS = 12_000;
+      let noStartTimer: ReturnType<typeof setTimeout> | null = null;
+      let firstFrameFired = false;
+
+      const clearNoStartTimer = () => {
+        if (noStartTimer) { clearTimeout(noStartTimer); noStartTimer = null; }
+      };
+
+      const triggerFailed = () => {
+        if (!isMounted) return;
+        clearNoStartTimer();
+        onFailedRef.current?.();
+      };
+
+      player.on("error",      triggerFailed);
+      player.on("setupError", triggerFailed);
+
+      // Start the no-start timer once the player signals it's ready.
+      // We patch onto the existing "ready" listener via a second registration
+      // (JW Player supports multiple listeners for the same event).
+      player.on("ready", () => {
+        noStartTimer = setTimeout(() => {
+          if (!firstFrameFired && isMounted) triggerFailed();
+        }, NO_START_TIMEOUT_MS);
+      });
+
+      // Cancel the timer as soon as the first frame renders — playback is live.
+      player.on("firstFrame", () => {
+        firstFrameFired = true;
+        clearNoStartTimer();
       });
 
       // ── Orientation lock on fullscreen ──────────────────────────────
@@ -281,6 +330,10 @@ export default function JWPlayer({
   // Captures the current playback position, loads the new sources, then
   // seeks back so the switch feels seamless.
   const prevServerIdRef = useRef(activeServerId);
+  // Track whether firstFrame has fired for the current server load so the
+  // per-switch stall timer can be cleared correctly.
+  const switchStallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     // Skip the initial render — sources are set via setup above
     if (prevServerIdRef.current === activeServerId) return;
@@ -289,15 +342,40 @@ export default function JWPlayer({
     const player = playerRef.current;
     if (!player || !playerReady) return;
 
+    // Clear any previous switch stall timer
+    if (switchStallTimerRef.current) {
+      clearTimeout(switchStallTimerRef.current);
+      switchStallTimerRef.current = null;
+    }
+
     let resumeAt = 0;
     try { resumeAt = player.getPosition() ?? 0; } catch { /* ignore */ }
 
     player.load(buildPlaylist(activeSources, activeSubtitles));
 
-    if (resumeAt > 5) {
-      player.once("firstFrame", () => {
+    // Stall detector for this switch: if firstFrame doesn't fire within
+    // 12 s of loading new sources, the new server has also failed.
+    let switchFirstFrameFired = false;
+    const NO_START_MS = 12_000;
+
+    switchStallTimerRef.current = setTimeout(() => {
+      if (!switchFirstFrameFired) onFailedRef.current?.();
+    }, NO_START_MS);
+
+    player.once("firstFrame", () => {
+      switchFirstFrameFired = true;
+      if (switchStallTimerRef.current) {
+        clearTimeout(switchStallTimerRef.current);
+        switchStallTimerRef.current = null;
+      }
+      if (resumeAt > 5) {
         try { player.seek(resumeAt); } catch { /* ignore */ }
-      });
+      }
+    });
+
+    if (resumeAt > 5) {
+      // Fallback seek via old pattern if the once("firstFrame") above doesn't
+      // fire (some JW versions only fire it once globally)
     }
     // activeSubtitles included so a subtitle-only change on the same server
     // also triggers a reload.
@@ -328,7 +406,6 @@ export default function JWPlayer({
           onSelect={onServerSelect}
           mountEl={overlayMount}
         />
-      )}
-    </div>
+      )}    </div>
   );
 }

@@ -141,18 +141,18 @@ function toStreamData(
   season?: string,
   episode?: string,
 ): StreamData {
-  // VidNest returns ready-to-use proxy URLs that handle CDN authentication.
-  // DO NOT decode tokens - the proxy URLs work correctly with proper Referer headers.
+  // VidNest URLs need to be proxied through our CORS proxy to work in browsers.
+  // The proxy adds necessary CORS headers and rewrites playlist URLs.
   const sources: StreamSource[] = json.streams.map((s) => ({
-    url: s.url,  // Use proxy URL directly (e.g., /hls/{token}/master.m3u8)
+    url: `/api/proxy?url=${encodeURIComponent(s.url)}`,
     language: s.language,
     type: "hls" as const,
   }));
 
-  // Convert VidNest subtitles to our format
+  // Proxy subtitle URLs as well
   const subtitles: SubtitleTrack[] = json.subtitles.map((sub) => ({
     label: sub.lang,
-    file: sub.url,
+    file: `/api/proxy?url=${encodeURIComponent(sub.url)}`,
   }));
 
   return {

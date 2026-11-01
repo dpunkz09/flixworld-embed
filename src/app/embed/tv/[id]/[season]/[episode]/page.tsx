@@ -1,5 +1,6 @@
 import { fetchTVStream } from "@/lib/api";
 import JWPlayerClient from "@/components/JWPlayerClient";
+import { PlayerErrorBoundary } from "@/components/PlayerErrorBoundary";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
@@ -25,7 +26,9 @@ export default async function TVEmbed({ params }: Props) {
 
   return (
     <div style={{ width: "100%", height: "100%", background: "#000", overflow: "hidden" }}>
-      <JWPlayerClient data={data} />
+      <PlayerErrorBoundary>
+        <JWPlayerClient data={data} />
+      </PlayerErrorBoundary>
     </div>
   );
 }

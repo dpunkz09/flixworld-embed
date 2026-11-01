@@ -61,6 +61,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,1,0&display=swap"
         />
+        {/* Preload JW Player script for faster initialization */}
+        <link rel="preload" href="//ssl.p.jwpcdn.com/player/v/8.22.0/jwplayer.js" as="script" />
       </head>
       <body>
         {children}

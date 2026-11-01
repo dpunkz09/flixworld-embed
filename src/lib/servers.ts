@@ -1,21 +1,18 @@
 /**
- * Server registry + preload logic for the server-switching overlay.
- *
- * All servers call the fw-api at FW_API_BASE (localhost:4444 in production,
- * falling back to https://mp4-server.jpaworx.com). The /api/stream proxy
- * route handles all client-side requests server-side, so the API is never
- * called directly from the browser.
- *
- * The first server (alfa / Videasy) reuses the sources already fetched
- * server-side and passed in via StreamData — instant, no extra request.
- * Every other server is fetched client-side during preload and resolves
- * independently so the UI updates incrementally.
+ * VidNest Direct Streaming - No Proxy Needed!
+ * 
+ * VidNest Worker API returns direct HLS streams that work without proxy.
+ * All streams are fetched from: https://long-night-d802.streamed-5.workers.dev
+ * 
+ * The server-side fetch in api.ts gets the default streams.
+ * This file is simplified since we don't need multiple server sources anymore -
+ * VidNest already aggregates multiple sources and returns the best ones.
  */
 
 import type { StreamData, StreamSource } from "./api";
 
 // ---------------------------------------------------------------------------
-// Public types
+// Public types (kept for compatibility)
 // ---------------------------------------------------------------------------
 
 export type ServerStatus = "idle" | "loading" | "ready" | "error";
@@ -51,182 +48,26 @@ export interface ServerDef {
   id: string;
   label: string;
   tag: string;
-  /** jpaworx stream key, e.g. "vidzee", "allmovies" */
+  /** VidNest language key */
   key: string;
   fetch: (data: StreamData, signal?: AbortSignal) => Promise<ServerResult | null>;
 }
 
 // ---------------------------------------------------------------------------
-// Raw API response shape (shared across all servers)
-// ---------------------------------------------------------------------------
-
-interface JpaStream {
-  url: string;
-  type: string;
-  language: string;
-  quality?: string;
-}
-
-/** Source entry used by servers like ophim (klikxxi) that return `sources[]` */
-interface JpaSource {
-  url: string;
-  type: string;
-  quality?: string;
-}
-
-interface JpaExtracted {
-  /** Present on most servers */
-  streams?: JpaStream[];
-  /** Present on ophim/klikxxi — same concept, different key */
-  sources?: JpaSource[];
-  /** Present on catflix/alfa/zeta/filxer — direct URL with no array */
-  url?: string;
-  /** HLS flag set by catflix / videasy / zeta */
-  type?: string;
-  /** Multiple quality variants — zeta (nextgencloudfabric) */
-  all_urls?: string[];
-}
-
-interface JpaResponse {
-  ok: boolean;
-  extracted?: JpaExtracted;
-}
-
-// Token injected at build time from NEXT_PUBLIC_INTERNAL_API_TOKEN.
-// Sent as a header on every /api/stream request so the route can reject
-// requests that don't originate from this app.
-const INTERNAL_TOKEN = process.env.NEXT_PUBLIC_INTERNAL_API_TOKEN ?? "";
-
-function buildUrl(key: string, data: StreamData): string {
-  const isTV = data.mediaType === "tv" || !!data.season;
-  const qs = new URLSearchParams({ key, type: isTV ? "tv" : "movie", tmdbId: data.tmdbId });
-  if (isTV) {
-    qs.set("season",  data.season  ?? "1");
-    qs.set("episode", data.episode ?? "1");
-  }
-  return `/api/stream?${qs}`;
-}
-
-async function fetchJpa(
-  key: string,
-  data: StreamData,
-  signal?: AbortSignal,
-): Promise<JpaStream[] | null> {
-  const url = buildUrl(key, data);
-  try {
-    // Combine caller's signal with a per-request timeout
-    const timeout = AbortSignal.timeout(20_000);
-    const combined = signal
-      ? AbortSignal.any([signal, timeout])
-      : timeout;
-
-    const res = await fetch(url, {
-      signal: combined,
-      headers: { "x-internal-token": INTERNAL_TOKEN },
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as JpaResponse;
-    if (!json.ok || !json.extracted) return null;
-
-    const ext = json.extracted;
-
-    // ── streams[] — most servers ──────────────────────────────────────────
-    if (ext.streams?.length) return ext.streams;
-
-    // ── sources[] — ophim/klikxxi ─────────────────────────────────────────
-    if (ext.sources?.length) {
-      return ext.sources
-        .filter((s) => s.url)
-        .map((s) => ({
-          url:      s.url,
-          type:     s.type ?? "hls",
-          // JpaSource has no language field; use quality as the display label
-          language: s.quality ?? "Auto",
-          quality:  s.quality,
-        }));
-    }
-
-    // ── flat url — catflix/buzz, alfa/videasy, filxer/rogflix, zeta ───────
-    if (ext.url) {
-      // zeta has all_urls[] with multiple quality variants — use those first
-      if (ext.all_urls?.length) {
-        return ext.all_urls.map((u, i) => ({
-          url:      u,
-          type:     ext.type ?? (u.includes(".m3u8") ? "hls" : "mp4"),
-          language: `Quality ${i + 1}`,
-          quality:  `${i + 1}`,
-        }));
-      }
-
-      return [{
-        url:      ext.url,
-        type:     ext.type ?? (ext.url.includes(".m3u8") ? "hls" : "mp4"),
-        language: "Auto",
-      }];
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function toServerResult(
-  streams: JpaStream[],
-  label: string,
-  data: StreamData,
-): ServerResult {
-  // vdrk.site subtitles already in data — reuse for every server
-  const subtitles: ServerSubtitle[] = (data.subtitles ?? []).map((s) => ({
-    url:   s.file,
-    label: s.label,
-    lang:  "en",
-  }));
-
-  const sources: ServerSource[] = streams
-    .filter((s) => s.url)
-    .map((s) => {
-      // Primary: trust the type string from the API
-      // Fallback: sniff from URL — .m3u8 extension, or HLS path segments (/hls/, /hls2/, /hls3/)
-      const hlsType =
-        s.type === "hls" ||
-        s.type === "m3u8" ||
-        s.type === "application/x-mpegurl";
-      const hlsUrl =
-        s.url.includes(".m3u8") ||
-        /\/hls\d*\//i.test(s.url);
-      return {
-        url:     s.url,
-        quality: s.quality ?? s.language ?? "Auto",
-        server:  label,
-        type:    (hlsType || hlsUrl ? "hls" : "mp4") as "hls" | "mp4",
-      };
-    });
-
-  return { sources, subtitles };
-}
-
-// ---------------------------------------------------------------------------
-// Server definitions
+// Server definitions - Now just organize VidNest streams by language
 // ---------------------------------------------------------------------------
 
 const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string }> = [
-  { id: "gama",    label: "Gama",    tag: "HD",    key: "vidzee"             },
-  { id: "zeta",    label: "Zeta",    tag: "HD",    key: "nextgencloudfabric" },
-  { id: "alfa",    label: "Alfa",    tag: "HD",    key: "videasy"            },
-  { id: "catflix", label: "Catflix", tag: "HD",    key: "buzz"               },
-  { id: "filxer",  label: "Filxer",  tag: "HD",    key: "rogflix"            },
-  { id: "lamda",   label: "Lamda",   tag: "MULTI", key: "allmovies"          },
-  { id: "hexa",    label: "Hexa",    tag: "HD",    key: "vidlink"            },
-  { id: "ophim",   label: "Ophim",   tag: "HD",    key: "klikxxi"            },
-  { id: "beta",    label: "Beta",    tag: "HD",    key: "vidxyz"             },
-  { id: "sigma",   label: "Sigma",   tag: "HD",    key: "hollymoviehd"       },
+  { id: "original", label: "Original", tag: "1080p", key: "Original" },
+  { id: "hindi",    label: "Hindi",    tag: "1080p", key: "Hindi"    },
+  { id: "arabic",   label: "Arabic",   tag: "1080p", key: "Arabic"   },
+  { id: "french",   label: "French",   tag: "1080p", key: "French"   },
+  { id: "spanish",  label: "Spanish",  tag: "720p",  key: "Spanish"  },
 ];
 
 /**
- * Build a ServerDef for a given entry.
- * The first entry (alfa/videasy) reuses data.sources — instant, no request.
- * All others call the jpaworx API.
+ * Build a ServerDef for a given language.
+ * Since VidNest returns all streams at once, we just filter by language.
  */
 function makeDef(
   entry: (typeof SERVER_LIST)[number],
@@ -235,23 +76,47 @@ function makeDef(
   return {
     ...entry,
     fetch: async (data: StreamData, signal?: AbortSignal) => {
-      if (isDefault) {
-        if (!data.sources.length) return null;
-        return toServerResult(
-          data.sources.map((s) => ({
-            url:      s.url,
-            // Carry through the type set by api.ts; fall back to URL sniffing
-            type:     s.type ?? (s.url.includes(".m3u8") ? "hls" : "mp4"),
-            language: s.language ?? "Auto",
-          })),
-          entry.label,
-          data,
-        );
+      if (signal?.aborted) return null;
+      
+      // VidNest already fetched all streams - filter by language
+      const matchingSource = data.sources.find(
+        s => s.language.toLowerCase() === entry.key.toLowerCase()
+      );
+      
+      if (!matchingSource) {
+        // If language not found, return the first available stream
+        if (isDefault && data.sources.length > 0) {
+          const fallback = data.sources[0];
+          return {
+            sources: [{
+              url: fallback.url,
+              quality: fallback.language,
+              server: entry.label,
+              type: fallback.type ?? "hls",
+            }],
+            subtitles: (data.subtitles ?? []).map((s) => ({
+              url: s.file,
+              label: s.label,
+              lang: "en",
+            })),
+          };
+        }
+        return null;
       }
 
-      const streams = await fetchJpa(entry.key, data, signal);
-      if (!streams) return null;
-      return toServerResult(streams, entry.label, data);
+      return {
+        sources: [{
+          url: matchingSource.url,
+          quality: entry.key,
+          server: entry.label,
+          type: matchingSource.type ?? "hls",
+        }],
+        subtitles: (data.subtitles ?? []).map((s) => ({
+          url: s.file,
+          label: s.label,
+          lang: "en",
+        })),
+      };
     },
   };
 }

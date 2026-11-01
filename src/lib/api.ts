@@ -1,27 +1,31 @@
 import { unstable_cache } from "next/cache";
 
-const VIDEASY_BASE  = `${process.env.FW_API_BASE ?? ""}/stream/videasy`;
-const SUBTITLE_BASE = "https://cache.vdrk.site/v2";
+// Use the new VidNest Worker API (discovered and documented)
+const VIDNEST_BASE  = "https://long-night-d802.streamed-5.workers.dev";
 const TMDB_BASE     = "https://api.themoviedb.org/3";
 const TMDB_KEY      = process.env.TMDB_API_KEY ?? "";
 
 // ---------------------------------------------------------------------------
-// Raw API response shapes — Videasy (default server)
+// Raw API response shapes — VidNest Worker
 // ---------------------------------------------------------------------------
 
-interface VideasyStream {
+interface VidNestStream {
   url: string;
   type: string;
   language: string;
+  quality: string;
 }
 
-interface VideasyResponse {
-  ok: boolean;
-  extracted: {
-    url?: string;
-    type?: string;
-    streams?: VideasyStream[];
-  };
+interface VidNestSubtitle {
+  lang: string;
+  language?: string;
+  url: string;
+}
+
+interface VidNestResponse {
+  status: string;
+  streams: VidNestStream[];
+  subtitles: VidNestSubtitle[];
 }
 
 // ---------------------------------------------------------------------------
@@ -110,74 +114,82 @@ export interface StreamData {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch helpers — Videasy
+// Fetch helpers — VidNest Worker
 // ---------------------------------------------------------------------------
 
-async function videasyGet(url: string): Promise<VideasyResponse> {
-  // No inner next.revalidate — the outer unstable_cache controls caching.
+async function vidnestGet(url: string): Promise<VidNestResponse> {
   const res = await fetch(url, {
     headers: {
       Accept: "application/json",
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "Referer": "https://vidnest.fun/",
+      "Origin": "https://vidnest.fun",
     },
   });
-  if (!res.ok) throw new Error(`Videasy API error ${res.status}: ${url}`);
-  const json: VideasyResponse = await res.json();
-  if (!json.ok) throw new Error(`Videasy returned ok=false for: ${url}`);
+  if (!res.ok) throw new Error(`VidNest API error ${res.status}: ${url}`);
+  const json: VidNestResponse = await res.json();
+  if (json.status !== "success") throw new Error(`VidNest returned status=${json.status} for: ${url}`);
   return json;
 }
 
-async function subtitleGet(url: string): Promise<SubtitleTrack[]> {
+/** 
+ * Decode base64 token from VidNest URL to get actual CDN URL.
+ * VidNest returns proxy URLs with tokens like:
+ * /hls/{base64_token}/master.m3u8
+ * 
+ * The token decodes to JSON with:
+ * { u: "actual_url", h: { "Referer": "..." }, m: {...} }
+ * 
+ * Note: This function uses browser-native atob() for base64 decoding.
+ */
+function decodeVidNestToken(url: string): string {
   try {
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(`[subtitleGet] Non-ok response ${res.status} for ${url}`);
-      }
-      return [];
-    }
-    const json: SubtitleTrack[] = await res.json();
-    return Array.isArray(json) ? json : [];
+    // Extract token from URL patterns like /hls/{token}/master.m3u8
+    const match = url.match(/\/hls\/([^\/]+)\/master\.m3u8/);
+    if (!match) return url; // Return as-is if no token found
+    
+    const token = match[1];
+    // Convert base64url to base64 (replace URL-safe chars)
+    const base64 = token.replace(/-/g, '+').replace(/_/g, '/');
+    // Use browser-native atob() instead of Node.js Buffer
+    const decoded = atob(base64);
+    const data = JSON.parse(decoded);
+    
+    // Return the actual CDN URL if available, otherwise use proxy URL
+    return data.u || url;
   } catch {
-    return [];
+    // If decoding fails, return the original URL (it's still playable through the proxy)
+    return url;
   }
 }
 
 function toStreamData(
   tmdbId: string,
-  json: VideasyResponse,
-  subtitles: SubtitleTrack[],
+  json: VidNestResponse,
   mediaInfo: MediaInfo | undefined,
   mediaType: "movie" | "tv",
   season?: string,
   episode?: string,
 ): StreamData {
-  const ext = json.extracted;
+  // VidNest returns ready-to-use streams with language and quality info
+  const sources: StreamSource[] = json.streams.map((s) => {
+    // VidNest URLs can be used directly (through proxy) or decoded to get actual CDN URL
+    const url = decodeVidNestToken(s.url);
+    
+    // VidNest always returns HLS streams
+    return {
+      url,
+      language: s.language,
+      type: "hls" as const,
+    };
+  });
 
-  // Videasy may return streams[] or a flat { url, type } object.
-  // Normalise both into StreamSource[].
-  let sources: StreamSource[] = [];
-
-  if (ext.streams?.length) {
-    sources = ext.streams.map((s) => {
-      const isHls =
-        s.type === "hls" ||
-        s.type === "m3u8" ||
-        s.type === "application/x-mpegurl" ||
-        s.url.includes(".m3u8") ||
-        /\/hls\d*\//i.test(s.url);
-      return { url: s.url, language: s.language, type: isHls ? "hls" : "mp4" };
-    });
-  } else if (ext.url) {
-    const isHls =
-      ext.type === "hls" ||
-      ext.url.includes(".m3u8") ||
-      /\/hls\d*\//i.test(ext.url);
-    sources = [{ url: ext.url, language: "Auto", type: isHls ? "hls" : "mp4" }];
-  }
+  // Convert VidNest subtitles to our format
+  const subtitles: SubtitleTrack[] = json.subtitles.map((sub) => ({
+    label: sub.lang,
+    file: sub.url,
+  }));
 
   return {
     tmdbId,
@@ -285,26 +297,24 @@ async function fetchTVInfo(
 
 export const fetchMovieStream = unstable_cache(
   async (tmdbId: string): Promise<StreamData> => {
-    const [json, subtitles, mediaInfo] = await Promise.all([
-      videasyGet(`${VIDEASY_BASE}/movie/${tmdbId}`),
-      subtitleGet(`${SUBTITLE_BASE}/movie/${tmdbId}/`),
+    const [json, mediaInfo] = await Promise.all([
+      vidnestGet(`${VIDNEST_BASE}/movie/${tmdbId}`),
       fetchMovieInfo(tmdbId),
     ]);
-    return toStreamData(tmdbId, json, subtitles, mediaInfo, "movie");
+    return toStreamData(tmdbId, json, mediaInfo, "movie");
   },
-  ["videasy-movie"],
-  { revalidate: 300, tags: ["videasy-movie"] },
+  ["vidnest-movie"],
+  { revalidate: 300, tags: ["vidnest-movie"] },
 );
 
 export const fetchTVStream = unstable_cache(
   async (tmdbId: string, season: string, episode: string): Promise<StreamData> => {
-    const [json, subtitles, mediaInfo] = await Promise.all([
-      videasyGet(`${VIDEASY_BASE}/tv/${tmdbId}/${season}/${episode}`),
-      subtitleGet(`${SUBTITLE_BASE}/tv/${tmdbId}/${season}/${episode}`),
+    const [json, mediaInfo] = await Promise.all([
+      vidnestGet(`${VIDNEST_BASE}/tv/${tmdbId}/${season}/${episode}`),
       fetchTVInfo(tmdbId, season, episode),
     ]);
-    return toStreamData(tmdbId, json, subtitles, mediaInfo, "tv", season, episode);
+    return toStreamData(tmdbId, json, mediaInfo, "tv", season, episode);
   },
-  ["videasy-tv"],
-  { revalidate: 300, tags: ["videasy-tv"] },
+  ["vidnest-tv"],
+  { revalidate: 300, tags: ["vidnest-tv"] },
 );

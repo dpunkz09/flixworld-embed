@@ -23,7 +23,7 @@ function loadProgress(key: string): number {
     const raw = localStorage.getItem(key);
     if (!raw) return 0;
     const { t } = JSON.parse(raw) as { t: number };
-    return typeof t === "number" && t > 5 ? t : 0;
+    return typeof t === "number" && t > PLAYBACK_TIMEOUTS.RESUME_MIN ? t : 0;
   } catch {
     return 0;
   }
@@ -37,9 +37,9 @@ function loadProgress(key: string): number {
  * skip the near-end guard and always save.
  */
 function saveProgress(key: string, position: number, duration: number) {
-  if (position < 5) return;
-  // When duration is known and we're within 30 s of the end, clear the entry
-  if (duration > 0 && duration - position < 30) {
+  if (position < PLAYBACK_TIMEOUTS.RESUME_MIN) return;
+  // When duration is known and we're within buffer seconds of the end, clear the entry
+  if (duration > 0 && duration - position < PLAYBACK_TIMEOUTS.NEAR_END_BUFFER) {
     try { localStorage.removeItem(key); } catch { /* quota */ }
     return;
   }
@@ -62,6 +62,15 @@ declare global {
 
 const JW_LICENSE_KEY = process.env.NEXT_PUBLIC_JW_LICENSE_KEY ?? "";
 const JW_SCRIPT_URL  = "//ssl.p.jwpcdn.com/player/v/8.22.0/jwplayer.js";
+
+// Playback timing constants
+const PLAYBACK_TIMEOUTS = {
+  NO_START: 12_000,          // Max time to wait for initial playback (ms)
+  SWITCH_STALL: 12_000,      // Max time to wait after switching servers (ms)
+  SAVE_THROTTLE: 5_000,      // Min interval between progress saves (ms)
+  RESUME_MIN: 5,             // Min position to resume from (seconds)
+  NEAR_END_BUFFER: 30,       // Seconds before end to clear progress (seconds)
+} as const;
 
 // ---------------------------------------------------------------------------
 // Playlist builder (module-level pure function — not recreated per render)
@@ -146,6 +155,15 @@ export default function JWPlayer({
 
   const pKey = progressKey(data);
 
+  // Reset save timer when switching to a different title
+  const prevTmdbIdRef = useRef(data.tmdbId);
+  useEffect(() => {
+    if (prevTmdbIdRef.current !== data.tmdbId) {
+      prevTmdbIdRef.current = data.tmdbId;
+      saveTimerRef.current = 0; // Reset save throttle for new title
+    }
+  }, [data.tmdbId]);
+
   // ── Initial setup ──────────────────────────────────────────────────────
   useEffect(() => {
     let isMounted = true;
@@ -175,7 +193,7 @@ export default function JWPlayer({
 
       player.on("time", ({ position, duration }: { position: number; duration: number }) => {
         const now = Date.now();
-        if (now - saveTimerRef.current > 5000) {
+        if (now - saveTimerRef.current > PLAYBACK_TIMEOUTS.SAVE_THROTTLE) {
           saveTimerRef.current = now;
           // duration can be 0 on some HLS streams until the manifest is fully
           // parsed — fall back to a sentinel so we still save position, and
@@ -201,7 +219,7 @@ export default function JWPlayer({
         // Seek to saved position once the first frame is rendered.
         // seek() called at "ready" can be ignored on HLS before buffering
         // starts — "firstFrame" is the earliest reliable seek point.
-        if (savedTime > 0) {
+        if (savedTime > PLAYBACK_TIMEOUTS.RESUME_MIN) {
           player.once("firstFrame", () => {
             try { player.seek(savedTime); } catch { /* ignore */ }
           });
@@ -215,7 +233,6 @@ export default function JWPlayer({
       //   3. No-start timeout — ready fired but firstFrame hasn't arrived
       //      within NO_START_TIMEOUT_MS. Catches silent HLS stalls.
 
-      const NO_START_TIMEOUT_MS = 12_000;
       let noStartTimer: ReturnType<typeof setTimeout> | null = null;
       let firstFrameFired = false;
 
@@ -238,7 +255,7 @@ export default function JWPlayer({
       player.on("ready", () => {
         noStartTimer = setTimeout(() => {
           if (!firstFrameFired && isMounted) triggerFailed();
-        }, NO_START_TIMEOUT_MS);
+        }, PLAYBACK_TIMEOUTS.NO_START);
       });
 
       // Cancel the timer as soon as the first frame renders — playback is live.
@@ -316,6 +333,11 @@ export default function JWPlayer({
 
     return () => {
       isMounted = false;
+      // Clear switch stall timer to prevent memory leak
+      if (switchStallTimerRef.current) {
+        clearTimeout(switchStallTimerRef.current);
+        switchStallTimerRef.current = null;
+      }
       if (handleFullscreenChange) {
         document.removeEventListener("fullscreenchange", handleFullscreenChange);
         document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
@@ -354,13 +376,12 @@ export default function JWPlayer({
     player.load(buildPlaylist(activeSources, activeSubtitles));
 
     // Stall detector for this switch: if firstFrame doesn't fire within
-    // 12 s of loading new sources, the new server has also failed.
+    // timeout seconds of loading new sources, the new server has also failed.
     let switchFirstFrameFired = false;
-    const NO_START_MS = 12_000;
 
     switchStallTimerRef.current = setTimeout(() => {
       if (!switchFirstFrameFired) onFailedRef.current?.();
-    }, NO_START_MS);
+    }, PLAYBACK_TIMEOUTS.SWITCH_STALL);
 
     player.once("firstFrame", () => {
       switchFirstFrameFired = true;
@@ -368,12 +389,12 @@ export default function JWPlayer({
         clearTimeout(switchStallTimerRef.current);
         switchStallTimerRef.current = null;
       }
-      if (resumeAt > 5) {
+      if (resumeAt > PLAYBACK_TIMEOUTS.RESUME_MIN) {
         try { player.seek(resumeAt); } catch { /* ignore */ }
       }
     });
 
-    if (resumeAt > 5) {
+    if (resumeAt > PLAYBACK_TIMEOUTS.RESUME_MIN) {
       // Fallback seek via old pattern if the once("firstFrame") above doesn't
       // fire (some JW versions only fire it once globally)
     }

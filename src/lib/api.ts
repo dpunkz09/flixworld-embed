@@ -1,32 +1,14 @@
 import { unstable_cache } from "next/cache";
+import { fetchVidsrcMovie, fetchVidsrcTV, type VidsrcStreamData } from "./vidsrc";
 
-// Use the new VidNest Worker API (discovered and documented)
-const VIDNEST_BASE  = "https://long-night-d802.streamed-5.workers.dev";
-const TMDB_BASE     = "https://api.themoviedb.org/3";
-const TMDB_KEY      = process.env.TMDB_API_KEY ?? "";
+// TMDB API for metadata
+const TMDB_BASE = "https://api.themoviedb.org/3";
+const TMDB_KEY = process.env.TMDB_API_KEY ?? "";
 
 // ---------------------------------------------------------------------------
-// Raw API response shapes — VidNest Worker
+// Raw API response shapes
 // ---------------------------------------------------------------------------
-
-interface VidNestStream {
-  url: string;
-  type: string;
-  language: string;
-  quality: string;
-}
-
-interface VidNestSubtitle {
-  lang: string;
-  language?: string;
-  url: string;
-}
-
-interface VidNestResponse {
-  status: string;
-  streams: VidNestStream[];
-  subtitles: VidNestSubtitle[];
-}
+// Vidsrc types are imported from ./vidsrc.ts
 
 // ---------------------------------------------------------------------------
 // Minimal TMDB response shapes (avoids `any`, catches field-name typos)
@@ -114,54 +96,27 @@ export interface StreamData {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch helpers — VidNest Worker
+// Fetch helpers — Vidsrc
 // ---------------------------------------------------------------------------
-
-async function vidnestGet(url: string): Promise<VidNestResponse> {
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-      "Referer": "https://vidnest.fun/",
-      "Origin": "https://vidnest.fun",
-    },
-  });
-  if (!res.ok) throw new Error(`VidNest API error ${res.status}: ${url}`);
-  const json: VidNestResponse = await res.json();
-  if (json.status !== "success") throw new Error(`VidNest returned status=${json.status} for: ${url}`);
-  return json;
-}
 
 function toStreamData(
   tmdbId: string,
-  json: VidNestResponse,
+  vidsrcData: VidsrcStreamData,
   mediaInfo: MediaInfo | undefined,
   mediaType: "movie" | "tv",
   season?: string,
-  episode?: string,
+  episode?: string
 ): StreamData {
-  // Get Cloudflare Worker proxy URL from environment
-  const WORKER_PROXY = process.env.NEXT_PUBLIC_HLS_PROXY;
-  
-  if (!WORKER_PROXY) {
-    throw new Error(
-      "NEXT_PUBLIC_HLS_PROXY environment variable is not set. " +
-      "Please deploy the Cloudflare Worker and add its URL to .env.local"
-    );
-  }
-  
-  // Proxy all stream URLs through Cloudflare Worker for CORS
-  const sources: StreamSource[] = json.streams.map((s) => ({
-    url: `${WORKER_PROXY}?url=${encodeURIComponent(s.url)}`,
-    language: s.language,
-    type: "hls" as const,
+  // Vidsrc returns fully tokenized URLs ready to use
+  const sources: StreamSource[] = vidsrcData.sources.map((s) => ({
+    url: s.url,
+    language: s.quality,
+    type: s.type,
   }));
 
-  // Proxy subtitle URLs as well
-  const subtitles: SubtitleTrack[] = json.subtitles.map((sub) => ({
-    label: sub.lang,
-    file: `${WORKER_PROXY}?url=${encodeURIComponent(sub.url)}`,
+  const subtitles: SubtitleTrack[] = vidsrcData.subtitles.map((sub) => ({
+    label: sub.label,
+    file: sub.file,
   }));
 
   return {
@@ -270,24 +225,24 @@ async function fetchTVInfo(
 
 export const fetchMovieStream = unstable_cache(
   async (tmdbId: string): Promise<StreamData> => {
-    const [json, mediaInfo] = await Promise.all([
-      vidnestGet(`${VIDNEST_BASE}/movie/${tmdbId}`),
+    const [vidsrcData, mediaInfo] = await Promise.all([
+      fetchVidsrcMovie(tmdbId),
       fetchMovieInfo(tmdbId),
     ]);
-    return toStreamData(tmdbId, json, mediaInfo, "movie");
+    return toStreamData(tmdbId, vidsrcData, mediaInfo, "movie");
   },
-  ["vidnest-movie"],
-  { revalidate: 300, tags: ["vidnest-movie"] },
+  ["vidsrc-movie"],
+  { revalidate: 300, tags: ["vidsrc-movie"] }
 );
 
 export const fetchTVStream = unstable_cache(
   async (tmdbId: string, season: string, episode: string): Promise<StreamData> => {
-    const [json, mediaInfo] = await Promise.all([
-      vidnestGet(`${VIDNEST_BASE}/tv/${tmdbId}/${season}/${episode}`),
+    const [vidsrcData, mediaInfo] = await Promise.all([
+      fetchVidsrcTV(tmdbId, season, episode),
       fetchTVInfo(tmdbId, season, episode),
     ]);
-    return toStreamData(tmdbId, json, mediaInfo, "tv", season, episode);
+    return toStreamData(tmdbId, vidsrcData, mediaInfo, "tv", season, episode);
   },
-  ["vidnest-tv"],
-  { revalidate: 300, tags: ["vidnest-tv"] },
+  ["vidsrc-tv"],
+  { revalidate: 300, tags: ["vidsrc-tv"] }
 );

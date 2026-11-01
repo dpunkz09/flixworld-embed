@@ -1,15 +1,32 @@
 import { unstable_cache } from "next/cache";
-import { fetchVidsrcMovie, fetchVidsrcTV, type VidsrcStreamData } from "./vidsrc";
-import { fetchStreamed, type StreamedResponse } from "./streamed";
 
-// TMDB API for metadata
-const TMDB_BASE = "https://api.themoviedb.org/3";
-const TMDB_KEY = process.env.TMDB_API_KEY ?? "";
+// Use the new VidNest Worker API (discovered and documented)
+const VIDNEST_BASE  = "https://long-night-d802.streamed-5.workers.dev";
+const TMDB_BASE     = "https://api.themoviedb.org/3";
+const TMDB_KEY      = process.env.TMDB_API_KEY ?? "";
 
 // ---------------------------------------------------------------------------
-// Raw API response shapes
+// Raw API response shapes — VidNest Worker
 // ---------------------------------------------------------------------------
-// Vidsrc types are imported from ./vidsrc.ts
+
+interface VidNestStream {
+  url: string;
+  type: string;
+  language: string;
+  quality: string;
+}
+
+interface VidNestSubtitle {
+  lang: string;
+  language?: string;
+  url: string;
+}
+
+interface VidNestResponse {
+  status: string;
+  streams: VidNestStream[];
+  subtitles: VidNestSubtitle[];
+}
 
 // ---------------------------------------------------------------------------
 // Minimal TMDB response shapes (avoids `any`, catches field-name typos)
@@ -97,57 +114,54 @@ export interface StreamData {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch helpers — Streamed (Primary) / Vidsrc (Fallback)
+// Fetch helpers — VidNest Worker
 // ---------------------------------------------------------------------------
 
-function streamedToStreamData(
-  tmdbId: string,
-  streamedData: StreamedResponse,
-  mediaInfo: MediaInfo | undefined,
-  mediaType: "movie" | "tv",
-  season?: string,
-  episode?: string
-): StreamData {
-  // Convert Streamed format to our StreamData format
-  const sources: StreamSource[] = streamedData.streams.map((s) => ({
-    url: s.url,
-    language: `${s.language} (${s.quality})`,
-    type: s.type,
-  }));
-
-  const subtitles: SubtitleTrack[] = streamedData.subtitles.map((sub) => ({
-    label: sub.lang,
-    file: sub.url,
-  }));
-
-  return {
-    tmdbId,
-    mediaType,
-    sources,
-    subtitles,
-    mediaInfo,
-    ...(season && episode ? { season, episode } : {}),
-  };
+async function vidnestGet(url: string): Promise<VidNestResponse> {
+  const res = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "Referer": "https://vidnest.fun/",
+      "Origin": "https://vidnest.fun",
+    },
+  });
+  if (!res.ok) throw new Error(`VidNest API error ${res.status}: ${url}`);
+  const json: VidNestResponse = await res.json();
+  if (json.status !== "success") throw new Error(`VidNest returned status=${json.status} for: ${url}`);
+  return json;
 }
 
 function toStreamData(
   tmdbId: string,
-  vidsrcData: VidsrcStreamData,
+  json: VidNestResponse,
   mediaInfo: MediaInfo | undefined,
   mediaType: "movie" | "tv",
   season?: string,
-  episode?: string
+  episode?: string,
 ): StreamData {
-  // Vidsrc returns fully tokenized URLs ready to use
-  const sources: StreamSource[] = vidsrcData.sources.map((s) => ({
-    url: s.url,
-    language: s.quality,
-    type: s.type,
+  // Get Cloudflare Worker proxy URL from environment
+  const WORKER_PROXY = process.env.NEXT_PUBLIC_HLS_PROXY;
+  
+  if (!WORKER_PROXY) {
+    throw new Error(
+      "NEXT_PUBLIC_HLS_PROXY environment variable is not set. " +
+      "Please deploy the Cloudflare Worker and add its URL to .env.local"
+    );
+  }
+  
+  // Proxy all stream URLs through Cloudflare Worker for CORS
+  const sources: StreamSource[] = json.streams.map((s) => ({
+    url: `${WORKER_PROXY}?url=${encodeURIComponent(s.url)}`,
+    language: s.language,
+    type: "hls" as const,
   }));
 
-  const subtitles: SubtitleTrack[] = vidsrcData.subtitles.map((sub) => ({
-    label: sub.label,
-    file: sub.file,
+  // Proxy subtitle URLs as well
+  const subtitles: SubtitleTrack[] = json.subtitles.map((sub) => ({
+    label: sub.lang,
+    file: `${WORKER_PROXY}?url=${encodeURIComponent(sub.url)}`,
   }));
 
   return {
@@ -256,40 +270,24 @@ async function fetchTVInfo(
 
 export const fetchMovieStream = unstable_cache(
   async (tmdbId: string): Promise<StreamData> => {
-    // Try Streamed API first
-    const streamedData = await fetchStreamed("movie", tmdbId);
-    const mediaInfo = await fetchMovieInfo(tmdbId);
-
-    if (streamedData) {
-      console.log(`[API] Using Streamed for movie ${tmdbId}`);
-      return streamedToStreamData(tmdbId, streamedData, mediaInfo, "movie");
-    }
-
-    // Fallback to vidsrc
-    console.log(`[API] Falling back to vidsrc for movie ${tmdbId}`);
-    const vidsrcData = await fetchVidsrcMovie(tmdbId);
-    return toStreamData(tmdbId, vidsrcData, mediaInfo, "movie");
+    const [json, mediaInfo] = await Promise.all([
+      vidnestGet(`${VIDNEST_BASE}/movie/${tmdbId}`),
+      fetchMovieInfo(tmdbId),
+    ]);
+    return toStreamData(tmdbId, json, mediaInfo, "movie");
   },
-  ["movie-stream"],
-  { revalidate: 300, tags: ["movie-stream"] }
+  ["vidnest-movie"],
+  { revalidate: 300, tags: ["vidnest-movie"] },
 );
 
 export const fetchTVStream = unstable_cache(
   async (tmdbId: string, season: string, episode: string): Promise<StreamData> => {
-    // Try Streamed API first
-    const streamedData = await fetchStreamed("tv", tmdbId, season, episode);
-    const mediaInfo = await fetchTVInfo(tmdbId, season, episode);
-
-    if (streamedData) {
-      console.log(`[API] Using Streamed for TV ${tmdbId} S${season}E${episode}`);
-      return streamedToStreamData(tmdbId, streamedData, mediaInfo, "tv", season, episode);
-    }
-
-    // Fallback to vidsrc
-    console.log(`[API] Falling back to vidsrc for TV ${tmdbId} S${season}E${episode}`);
-    const vidsrcData = await fetchVidsrcTV(tmdbId, season, episode);
-    return toStreamData(tmdbId, vidsrcData, mediaInfo, "tv", season, episode);
+    const [json, mediaInfo] = await Promise.all([
+      vidnestGet(`${VIDNEST_BASE}/tv/${tmdbId}/${season}/${episode}`),
+      fetchTVInfo(tmdbId, season, episode),
+    ]);
+    return toStreamData(tmdbId, json, mediaInfo, "tv", season, episode);
   },
-  ["tv-stream"],
-  { revalidate: 300, tags: ["tv-stream"] }
+  ["vidnest-tv"],
+  { revalidate: 300, tags: ["vidnest-tv"] },
 );

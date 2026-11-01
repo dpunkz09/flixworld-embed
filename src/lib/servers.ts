@@ -1,8 +1,12 @@
 /**
- * Vidsrc.sh Multi-Server Support
+ * VidNest Direct Streaming - No Proxy Needed!
  * 
- * Vidsrc returns multiple stream URLs (typically 3) from different CDN servers.
- * This file organizes them and provides fallback mechanisms.
+ * VidNest Worker API returns direct HLS streams that work without proxy.
+ * All streams are fetched from: https://long-night-d802.streamed-5.workers.dev
+ * 
+ * The server-side fetch in api.ts gets the default streams.
+ * This file is simplified since we don't need multiple server sources anymore -
+ * VidNest already aggregates multiple sources and returns the best ones.
  */
 
 import type { StreamData, StreamSource } from "./api";
@@ -50,42 +54,62 @@ export interface ServerDef {
 }
 
 // ---------------------------------------------------------------------------
-// Server definitions - Vidsrc provides multiple CDN servers
+// Server definitions - Now just organize VidNest streams by language
 // ---------------------------------------------------------------------------
 
-const SERVER_LIST: Array<{ id: string; label: string; tag: string }> = [
-  { id: "server1", label: "Server 1", tag: "HD" },
-  { id: "server2", label: "Server 2", tag: "HD" },
-  { id: "server3", label: "Server 3", tag: "HD" },
+const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string }> = [
+  { id: "original", label: "Original", tag: "1080p", key: "Original" },
+  { id: "hindi",    label: "Hindi",    tag: "1080p", key: "Hindi"    },
+  { id: "arabic",   label: "Arabic",   tag: "1080p", key: "Arabic"   },
+  { id: "french",   label: "French",   tag: "1080p", key: "French"   },
+  { id: "spanish",  label: "Spanish",  tag: "720p",  key: "Spanish"  },
 ];
 
 /**
- * Build a ServerDef for a given server index.
- * Vidsrc returns all streams at once, we just organize them by index.
+ * Build a ServerDef for a given language.
+ * Since VidNest returns all streams at once, we just filter by language.
  */
 function makeDef(
   entry: (typeof SERVER_LIST)[number],
-  index: number,
+  isDefault: boolean,
 ): ServerDef {
   return {
     ...entry,
-    key: entry.id,
     fetch: async (data: StreamData, signal?: AbortSignal) => {
       if (signal?.aborted) return null;
       
-      // Get the stream at this index
-      const source = data.sources[index];
+      // VidNest already fetched all streams - filter by language
+      const matchingSource = data.sources.find(
+        s => s.language.toLowerCase() === entry.key.toLowerCase()
+      );
       
-      if (!source) {
+      if (!matchingSource) {
+        // If language not found, return the first available stream
+        if (isDefault && data.sources.length > 0) {
+          const fallback = data.sources[0];
+          return {
+            sources: [{
+              url: fallback.url,
+              quality: fallback.language,
+              server: entry.label,
+              type: fallback.type ?? "hls",
+            }],
+            subtitles: (data.subtitles ?? []).map((s) => ({
+              url: s.file,
+              label: s.label,
+              lang: "en",
+            })),
+          };
+        }
         return null;
       }
 
       return {
         sources: [{
-          url: source.url,
-          quality: source.language || "HD",
+          url: matchingSource.url,
+          quality: entry.key,
           server: entry.label,
-          type: source.type ?? "hls",
+          type: matchingSource.type ?? "hls",
         }],
         subtitles: (data.subtitles ?? []).map((s) => ({
           url: s.file,
@@ -98,7 +122,7 @@ function makeDef(
 }
 
 export const SERVER_DEFS: ServerDef[] = SERVER_LIST.map((entry, i) =>
-  makeDef(entry, i),
+  makeDef(entry, i === 0),
 );
 
 // ---------------------------------------------------------------------------

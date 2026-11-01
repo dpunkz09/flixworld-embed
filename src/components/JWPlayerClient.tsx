@@ -127,8 +127,8 @@ export default function JWPlayerClient({ data }: Props) {
   const [activeServerId, setActiveServerId] = useState<string>(SERVER_DEFS[0].id);
 
   // ── Active sources/subtitles fed to JWPlayer ───────────────────────────
-  const [activeSources,   setActiveSources]   = useState<StreamSource[]>(data.sources);
-  const [activeSubtitles, setActiveSubtitles] = useState<SubtitleTrack[]>(data.subtitles);
+  const [activeSources,   setActiveSources]   = useState<StreamSource[]>(data.sources || []);
+  const [activeSubtitles, setActiveSubtitles] = useState<SubtitleTrack[]>(data.subtitles || []);
 
   // Synchronous ref — always reflects the latest servers state without
   // the one-render lag a useEffect sync would introduce.

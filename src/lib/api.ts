@@ -2,6 +2,8 @@ import { unstable_cache } from "next/cache";
 
 // Use the new VidNest Worker API (discovered and documented)
 const VIDNEST_BASE  = "https://long-night-d802.streamed-5.workers.dev";
+const VIDRIFT_BASE  = "https://embed.vidrift.net/api/boot";
+const VIDBOLT_BASE  = "https://vidbolt.xyz/api/resolve";
 const TMDB_BASE     = "https://api.themoviedb.org/3";
 const TMDB_KEY      = process.env.TMDB_API_KEY ?? "";
 
@@ -26,6 +28,67 @@ interface VidNestResponse {
   status: string;
   streams: VidNestStream[];
   subtitles: VidNestSubtitle[];
+}
+
+// ---------------------------------------------------------------------------
+// Raw API response shapes — VidRift API
+// ---------------------------------------------------------------------------
+
+interface VidRiftRung {
+  width: number;
+  height: number;
+}
+
+interface VidRiftOrionStream {
+  index: number;
+  url: string;
+  proxyUrl: string;
+  type: "hls" | "mp4";
+  provider: string;
+  direct: boolean;
+  name: string;
+  rungs?: VidRiftRung[];
+  subtitleListUrl: string;
+}
+
+interface VidRiftMeta {
+  tmdbId: string;
+  type: "movie" | "tv";
+  season: number | null;
+  episode: number | null;
+  playbackToken: string;
+  orionStreams: VidRiftOrionStream[];
+}
+
+interface VidRiftResponse {
+  meta: VidRiftMeta;
+}
+
+// ---------------------------------------------------------------------------
+// Raw API response shapes — VidBolt API
+// ---------------------------------------------------------------------------
+
+interface VidBoltSource {
+  url: string;
+  kind: "hls" | "mp4";
+  quality: string;
+  language: string;
+}
+
+interface VidBoltSubtitle {
+  url: string;
+  label: string;
+  lang: string;
+}
+
+interface VidBoltStream {
+  server: string;
+  sources: VidBoltSource[];
+  subtitles?: VidBoltSubtitle[]; // Optional
+}
+
+interface VidBoltResponse {
+  stream: VidBoltStream;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +196,47 @@ async function vidnestGet(url: string): Promise<VidNestResponse> {
   return json;
 }
 
+// ---------------------------------------------------------------------------
+// Fetch helpers — VidRift API
+// ---------------------------------------------------------------------------
+
+async function vidriftGet(url: string): Promise<VidRiftResponse> {
+  const res = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "Referer": "https://embed.vidrift.net/",
+    },
+  });
+  if (!res.ok) throw new Error(`VidRift API error ${res.status}: ${url}`);
+  const json: VidRiftResponse = await res.json();
+  return json;
+}
+
+// ---------------------------------------------------------------------------
+// Fetch helpers — VidBolt API
+// ---------------------------------------------------------------------------
+
+async function vidboltGet(url: string): Promise<VidBoltResponse> {
+  const res = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    },
+  });
+  if (!res.ok) throw new Error(`VidBolt API error ${res.status}: ${url}`);
+  const json: VidBoltResponse = await res.json();
+  
+  // Validate response structure
+  if (!json.stream) {
+    throw new Error(`VidBolt API returned invalid response: missing stream object`);
+  }
+  
+  return json;
+}
+
 function toStreamData(
   tmdbId: string,
   json: VidNestResponse,
@@ -171,6 +275,72 @@ function toStreamData(
     subtitles,
     mediaInfo,
     // Only spread season+episode when both are present
+    ...(season && episode ? { season, episode } : {}),
+  };
+}
+
+function toStreamDataFromVidRift(
+  tmdbId: string,
+  json: VidRiftResponse,
+  mediaInfo: MediaInfo | undefined,
+  mediaType: "movie" | "tv",
+  season?: string,
+  episode?: string,
+): StreamData {
+  const token = json.meta.playbackToken;
+  const baseUrl = "https://embed.vidrift.net";
+
+  // Convert Orion streams to StreamSource format
+  const sources: StreamSource[] = json.meta.orionStreams.map((stream) => {
+    const fullUrl = stream.url.startsWith("http") ? stream.url : `${baseUrl}${stream.url}`;
+    return {
+      url: `${fullUrl}?token=${token}`,
+      language: stream.name.replace("Orion · ", ""), // Extract language from name
+      type: stream.type === "mp4" ? "mp4" : "hls",
+    };
+  });
+
+  // For subtitles, we'd need to fetch the subtitleListUrl to get the actual subtitle tracks
+  // For now, return empty array (can be enhanced later if needed)
+  const subtitles: SubtitleTrack[] = [];
+
+  return {
+    tmdbId,
+    mediaType,
+    sources,
+    subtitles,
+    mediaInfo,
+    ...(season && episode ? { season, episode } : {}),
+  };
+}
+
+function toStreamDataFromVidBolt(
+  tmdbId: string,
+  json: VidBoltResponse,
+  mediaInfo: MediaInfo | undefined,
+  mediaType: "movie" | "tv",
+  season?: string,
+  episode?: string,
+): StreamData {
+  // Convert VidBolt sources to StreamSource format
+  const sources: StreamSource[] = (json.stream?.sources || []).map((source) => ({
+    url: source.url,
+    language: source.language,
+    type: source.kind === "mp4" ? "mp4" : "hls",
+  }));
+
+  // Convert VidBolt subtitles to SubtitleTrack format (with safety check)
+  const subtitles: SubtitleTrack[] = (json.stream?.subtitles || []).map((sub) => ({
+    label: sub.label,
+    file: sub.url,
+  }));
+
+  return {
+    tmdbId,
+    mediaType,
+    sources,
+    subtitles,
+    mediaInfo,
     ...(season && episode ? { season, episode } : {}),
   };
 }
@@ -290,4 +460,60 @@ export const fetchTVStream = unstable_cache(
   },
   ["vidnest-tv"],
   { revalidate: 300, tags: ["vidnest-tv"] },
+);
+
+// ---------------------------------------------------------------------------
+// VidRift API functions (alternative streaming source)
+// ---------------------------------------------------------------------------
+
+export const fetchMovieStreamVidRift = unstable_cache(
+  async (tmdbId: string): Promise<StreamData> => {
+    const [json, mediaInfo] = await Promise.all([
+      vidriftGet(`${VIDRIFT_BASE}/movie/${tmdbId}`),
+      fetchMovieInfo(tmdbId),
+    ]);
+    return toStreamDataFromVidRift(tmdbId, json, mediaInfo, "movie");
+  },
+  ["vidrift-movie"],
+  { revalidate: 300, tags: ["vidrift-movie"] },
+);
+
+export const fetchTVStreamVidRift = unstable_cache(
+  async (tmdbId: string, season: string, episode: string): Promise<StreamData> => {
+    const [json, mediaInfo] = await Promise.all([
+      vidriftGet(`${VIDRIFT_BASE}/tv/${tmdbId}/${season}/${episode}`),
+      fetchTVInfo(tmdbId, season, episode),
+    ]);
+    return toStreamDataFromVidRift(tmdbId, json, mediaInfo, "tv", season, episode);
+  },
+  ["vidrift-tv"],
+  { revalidate: 300, tags: ["vidrift-tv"] },
+);
+
+// ---------------------------------------------------------------------------
+// VidBolt API functions (alternative streaming source)
+// ---------------------------------------------------------------------------
+
+export const fetchMovieStreamVidBolt = unstable_cache(
+  async (tmdbId: string): Promise<StreamData> => {
+    const [json, mediaInfo] = await Promise.all([
+      vidboltGet(`${VIDBOLT_BASE}?type=movie&id=${tmdbId}`),
+      fetchMovieInfo(tmdbId),
+    ]);
+    return toStreamDataFromVidBolt(tmdbId, json, mediaInfo, "movie");
+  },
+  ["vidbolt-movie"],
+  { revalidate: 300, tags: ["vidbolt-movie"] },
+);
+
+export const fetchTVStreamVidBolt = unstable_cache(
+  async (tmdbId: string, season: string, episode: string): Promise<StreamData> => {
+    const [json, mediaInfo] = await Promise.all([
+      vidboltGet(`${VIDBOLT_BASE}?type=tv&id=${tmdbId}&season=${season}&episode=${episode}`),
+      fetchTVInfo(tmdbId, season, episode),
+    ]);
+    return toStreamDataFromVidBolt(tmdbId, json, mediaInfo, "tv", season, episode);
+  },
+  ["vidbolt-tv"],
+  { revalidate: 300, tags: ["vidbolt-tv"] },
 );

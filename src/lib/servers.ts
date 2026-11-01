@@ -10,6 +10,7 @@
  */
 
 import type { StreamData, StreamSource } from "./api";
+import { fetchMovieStreamVidRift, fetchTVStreamVidRift } from "./api";
 
 // ---------------------------------------------------------------------------
 // Public types (kept for compatibility)
@@ -48,8 +49,10 @@ export interface ServerDef {
   id: string;
   label: string;
   tag: string;
-  /** VidNest language key */
+  /** VidNest/VidBolt language key or VidRift indicator */
   key: string;
+  /** If true, this server fetches from VidRift API */
+  isVidRift?: boolean;
   fetch: (data: StreamData, signal?: AbortSignal) => Promise<ServerResult | null>;
 }
 
@@ -57,17 +60,31 @@ export interface ServerDef {
 // Server definitions - Now just organize VidNest streams by language
 // ---------------------------------------------------------------------------
 
-const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string }> = [
+const SERVER_LIST: Array<{ id: string; label: string; tag: string; key: string; isVidRift?: boolean }> = [
+  // VidNest servers (original)
   { id: "original", label: "Original", tag: "1080p", key: "Original" },
   { id: "hindi",    label: "Hindi",    tag: "1080p", key: "Hindi"    },
   { id: "arabic",   label: "Arabic",   tag: "1080p", key: "Arabic"   },
   { id: "french",   label: "French",   tag: "1080p", key: "French"   },
   { id: "spanish",  label: "Spanish",  tag: "720p",  key: "Spanish"  },
+  
+  // VidRift servers (alternative source)
+  { id: "vidrift-original", label: "VidRift Original", tag: "1080p", key: "Original", isVidRift: true },
+  { id: "vidrift-hindi",    label: "VidRift Hindi",    tag: "1080p", key: "Hindi",    isVidRift: true },
+  { id: "vidrift-tamil",    label: "VidRift Tamil",    tag: "1080p", key: "Tamil",    isVidRift: true },
+  { id: "vidrift-french",   label: "VidRift French",   tag: "1080p", key: "French",   isVidRift: true },
+  
+  // VidBolt servers (from pre-loaded data)
+  { id: "vidbolt-english", label: "VidBolt English", tag: "1080p", key: "English" },
+  { id: "vidbolt-french",  label: "VidBolt French",  tag: "1080p", key: "French" },
+  { id: "vidbolt-spanish", label: "VidBolt Spanish", tag: "1080p", key: "Spanish" },
+  { id: "vidbolt-arabic",  label: "VidBolt Arabic",  tag: "1080p", key: "Arabic sub" },
+  { id: "vidbolt-russian", label: "VidBolt Russian", tag: "1080p", key: "Russian" },
 ];
 
 /**
  * Build a ServerDef for a given language.
- * Since VidNest returns all streams at once, we just filter by language.
+ * If isVidRift is true, fetches from VidRift API. Otherwise uses pre-fetched data.
  */
 function makeDef(
   entry: (typeof SERVER_LIST)[number],
@@ -78,7 +95,47 @@ function makeDef(
     fetch: async (data: StreamData, signal?: AbortSignal) => {
       if (signal?.aborted) return null;
       
-      // VidNest already fetched all streams - filter by language
+      // If this is a VidRift server, fetch from VidRift API
+      if (entry.isVidRift) {
+        try {
+          let vidriftData: StreamData;
+          
+          // Determine if movie or TV show
+          if (data.mediaType === "tv" && data.season && data.episode) {
+            vidriftData = await fetchTVStreamVidRift(data.tmdbId, data.season, data.episode);
+          } else {
+            vidriftData = await fetchMovieStreamVidRift(data.tmdbId);
+          }
+          
+          if (signal?.aborted) return null;
+          
+          // Filter by language
+          const matchingSource = vidriftData.sources.find(
+            s => s.language.toLowerCase() === entry.key.toLowerCase()
+          );
+          
+          if (!matchingSource) return null;
+          
+          return {
+            sources: [{
+              url: matchingSource.url,
+              quality: entry.key,
+              server: entry.label,
+              type: matchingSource.type ?? "hls",
+            }],
+            subtitles: (vidriftData.subtitles ?? []).map((s) => ({
+              url: s.file,
+              label: s.label,
+              lang: "en",
+            })),
+          };
+        } catch (error) {
+          console.error(`VidRift fetch failed for ${entry.label}:`, error);
+          return null;
+        }
+      }
+      
+      // VidNest/VidBolt: filter from pre-fetched streams
       const matchingSource = data.sources.find(
         s => s.language.toLowerCase() === entry.key.toLowerCase()
       );

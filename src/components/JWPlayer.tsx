@@ -164,6 +164,53 @@ export default function JWPlayer({
     }
   }, [data.tmdbId]);
 
+  // Show message if no sources available (yet)
+  const hasNoSources = !activeSources || activeSources.length === 0;
+  const hasReadyServers = servers.some(s => s.status === "ready" && s.result?.sources.length);
+  
+  if (hasNoSources && !hasReadyServers) {
+    return (
+      <div style={{
+        width:          "100%",
+        height:         "100%",
+        background:     "#0a0a0f",
+        display:        "flex",
+        flexDirection:  "column",
+        alignItems:     "center",
+        justifyContent: "center",
+        gap:            "16px",
+        padding:        "24px",
+        fontFamily:     "system-ui, sans-serif",
+        textAlign:      "center",
+      }}>
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="8" x2="12" y2="12" />
+          <line x1="12" y1="16" x2="12.01" y2="16" />
+        </svg>
+        <div>
+          <p style={{ color: "#f0f0f5", fontSize: "16px", fontWeight: 600, margin: "0 0 8px 0" }}>
+            No streams found for default server
+          </p>
+          <p style={{ color: "#888", fontSize: "14px", margin: 0 }}>
+            Checking alternative servers...
+          </p>
+        </div>
+        <div style={{ marginTop: "8px" }}>
+          {servers.map(s => (
+            <div key={s.id} style={{ 
+              color: s.status === "loading" ? "#666" : s.status === "ready" ? "#4ade80" : "#ef4444",
+              fontSize: "12px",
+              padding: "4px 0"
+            }}>
+              {s.label}: {s.status}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   // ── Initial setup ──────────────────────────────────────────────────────
   useEffect(() => {
     let isMounted = true;

@@ -141,10 +141,19 @@ function toStreamData(
   season?: string,
   episode?: string,
 ): StreamData {
-  // VidNest URLs need to be proxied through our CORS proxy to work in browsers.
-  // The proxy adds necessary CORS headers and rewrites playlist URLs.
+  // Get Cloudflare Worker proxy URL from environment
+  const WORKER_PROXY = process.env.NEXT_PUBLIC_HLS_PROXY;
+  
+  if (!WORKER_PROXY) {
+    throw new Error(
+      "NEXT_PUBLIC_HLS_PROXY environment variable is not set. " +
+      "Please deploy the Cloudflare Worker and add its URL to .env.local"
+    );
+  }
+  
+  // Proxy all stream URLs through Cloudflare Worker for CORS
   const sources: StreamSource[] = json.streams.map((s) => ({
-    url: `/api/proxy?url=${encodeURIComponent(s.url)}`,
+    url: `${WORKER_PROXY}?url=${encodeURIComponent(s.url)}`,
     language: s.language,
     type: "hls" as const,
   }));
@@ -152,7 +161,7 @@ function toStreamData(
   // Proxy subtitle URLs as well
   const subtitles: SubtitleTrack[] = json.subtitles.map((sub) => ({
     label: sub.lang,
-    file: `/api/proxy?url=${encodeURIComponent(sub.url)}`,
+    file: `${WORKER_PROXY}?url=${encodeURIComponent(sub.url)}`,
   }));
 
   return {

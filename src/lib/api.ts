@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { fetchVidsrcMovie, fetchVidsrcTV, type VidsrcStreamData } from "./vidsrc";
+import { fetchStreamed, type StreamedResponse } from "./streamed";
 
 // TMDB API for metadata
 const TMDB_BASE = "https://api.themoviedb.org/3";
@@ -96,8 +97,38 @@ export interface StreamData {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch helpers — Vidsrc
+// Fetch helpers — Streamed (Primary) / Vidsrc (Fallback)
 // ---------------------------------------------------------------------------
+
+function streamedToStreamData(
+  tmdbId: string,
+  streamedData: StreamedResponse,
+  mediaInfo: MediaInfo | undefined,
+  mediaType: "movie" | "tv",
+  season?: string,
+  episode?: string
+): StreamData {
+  // Convert Streamed format to our StreamData format
+  const sources: StreamSource[] = streamedData.streams.map((s) => ({
+    url: s.url,
+    language: `${s.language} (${s.quality})`,
+    type: s.type,
+  }));
+
+  const subtitles: SubtitleTrack[] = streamedData.subtitles.map((sub) => ({
+    label: sub.lang,
+    file: sub.url,
+  }));
+
+  return {
+    tmdbId,
+    mediaType,
+    sources,
+    subtitles,
+    mediaInfo,
+    ...(season && episode ? { season, episode } : {}),
+  };
+}
 
 function toStreamData(
   tmdbId: string,
@@ -225,24 +256,40 @@ async function fetchTVInfo(
 
 export const fetchMovieStream = unstable_cache(
   async (tmdbId: string): Promise<StreamData> => {
-    const [vidsrcData, mediaInfo] = await Promise.all([
-      fetchVidsrcMovie(tmdbId),
-      fetchMovieInfo(tmdbId),
-    ]);
+    // Try Streamed API first
+    const streamedData = await fetchStreamed("movie", tmdbId);
+    const mediaInfo = await fetchMovieInfo(tmdbId);
+
+    if (streamedData) {
+      console.log(`[API] Using Streamed for movie ${tmdbId}`);
+      return streamedToStreamData(tmdbId, streamedData, mediaInfo, "movie");
+    }
+
+    // Fallback to vidsrc
+    console.log(`[API] Falling back to vidsrc for movie ${tmdbId}`);
+    const vidsrcData = await fetchVidsrcMovie(tmdbId);
     return toStreamData(tmdbId, vidsrcData, mediaInfo, "movie");
   },
-  ["vidsrc-movie"],
-  { revalidate: 300, tags: ["vidsrc-movie"] }
+  ["movie-stream"],
+  { revalidate: 300, tags: ["movie-stream"] }
 );
 
 export const fetchTVStream = unstable_cache(
   async (tmdbId: string, season: string, episode: string): Promise<StreamData> => {
-    const [vidsrcData, mediaInfo] = await Promise.all([
-      fetchVidsrcTV(tmdbId, season, episode),
-      fetchTVInfo(tmdbId, season, episode),
-    ]);
+    // Try Streamed API first
+    const streamedData = await fetchStreamed("tv", tmdbId, season, episode);
+    const mediaInfo = await fetchTVInfo(tmdbId, season, episode);
+
+    if (streamedData) {
+      console.log(`[API] Using Streamed for TV ${tmdbId} S${season}E${episode}`);
+      return streamedToStreamData(tmdbId, streamedData, mediaInfo, "tv", season, episode);
+    }
+
+    // Fallback to vidsrc
+    console.log(`[API] Falling back to vidsrc for TV ${tmdbId} S${season}E${episode}`);
+    const vidsrcData = await fetchVidsrcTV(tmdbId, season, episode);
     return toStreamData(tmdbId, vidsrcData, mediaInfo, "tv", season, episode);
   },
-  ["vidsrc-tv"],
-  { revalidate: 300, tags: ["vidsrc-tv"] }
+  ["tv-stream"],
+  { revalidate: 300, tags: ["tv-stream"] }
 );

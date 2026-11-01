@@ -3,9 +3,8 @@ module.exports = {
     {
       name: "FlixworldEmbed",
       cwd: "/var/www/flixworld.xyz/flixworld-embed",
-      // Run the compiled output directly â€” avoids nest CLI injecting
-      // --enable-source-maps which causes significant CPU overhead in production.
-      script: "dist/main.js",
+      script: "node_modules/next/dist/bin/next",
+      args: "start -p 1234",
       instances: 1,
       exec_mode: "fork",
       autorestart: true,
@@ -14,7 +13,6 @@ module.exports = {
       node_args: "--max-old-space-size=512",
       env: {
         NODE_ENV: "production",
-        PORT: 1234,
       },
       time: true,
     },

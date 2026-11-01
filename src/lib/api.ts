@@ -133,37 +133,6 @@ async function vidnestGet(url: string): Promise<VidNestResponse> {
   return json;
 }
 
-/** 
- * Decode base64 token from VidNest URL to get actual CDN URL.
- * VidNest returns proxy URLs with tokens like:
- * /hls/{base64_token}/master.m3u8
- * 
- * The token decodes to JSON with:
- * { u: "actual_url", h: { "Referer": "..." }, m: {...} }
- * 
- * Note: This function uses browser-native atob() for base64 decoding.
- */
-function decodeVidNestToken(url: string): string {
-  try {
-    // Extract token from URL patterns like /hls/{token}/master.m3u8
-    const match = url.match(/\/hls\/([^\/]+)\/master\.m3u8/);
-    if (!match) return url; // Return as-is if no token found
-    
-    const token = match[1];
-    // Convert base64url to base64 (replace URL-safe chars)
-    const base64 = token.replace(/-/g, '+').replace(/_/g, '/');
-    // Use browser-native atob() instead of Node.js Buffer
-    const decoded = atob(base64);
-    const data = JSON.parse(decoded);
-    
-    // Return the actual CDN URL if available, otherwise use proxy URL
-    return data.u || url;
-  } catch {
-    // If decoding fails, return the original URL (it's still playable through the proxy)
-    return url;
-  }
-}
-
 function toStreamData(
   tmdbId: string,
   json: VidNestResponse,
@@ -172,18 +141,13 @@ function toStreamData(
   season?: string,
   episode?: string,
 ): StreamData {
-  // VidNest returns ready-to-use streams with language and quality info
-  const sources: StreamSource[] = json.streams.map((s) => {
-    // VidNest URLs can be used directly (through proxy) or decoded to get actual CDN URL
-    const url = decodeVidNestToken(s.url);
-    
-    // VidNest always returns HLS streams
-    return {
-      url,
-      language: s.language,
-      type: "hls" as const,
-    };
-  });
+  // VidNest returns ready-to-use proxy URLs that handle CDN authentication.
+  // DO NOT decode tokens - the proxy URLs work correctly with proper Referer headers.
+  const sources: StreamSource[] = json.streams.map((s) => ({
+    url: s.url,  // Use proxy URL directly (e.g., /hls/{token}/master.m3u8)
+    language: s.language,
+    type: "hls" as const,
+  }));
 
   // Convert VidNest subtitles to our format
   const subtitles: SubtitleTrack[] = json.subtitles.map((sub) => ({
